@@ -1,0 +1,17 @@
+# Local credentials and secrets
+.env*
+*.pem
+*.key
+*token*
+*secret*
+*credentials*
+*auth*
+
+# Local runtime artifacts
+.venv/
+__pycache__/
+.pytest_cache/
+.mlflow/
+mlruns/
+logs/
+outputs/
