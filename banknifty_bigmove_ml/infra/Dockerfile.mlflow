@@ -1,5 +1,0 @@
-# The official ghcr.io/mlflow/mlflow image has no Postgres driver bundled —
-# `mlflow server --backend-store-uri postgresql://...` fails at startup with
-# ModuleNotFoundError: No module named 'psycopg2'. This just adds it.
-FROM ghcr.io/mlflow/mlflow:v2.16.0
-RUN pip install --no-cache-dir psycopg2-binary
