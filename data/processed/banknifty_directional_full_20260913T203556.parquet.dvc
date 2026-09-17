@@ -1,0 +1,5 @@
+outs:
+- md5: 3f1105474f8cb60e629837293e786a9f
+  size: 12145837
+  hash: md5
+  path: banknifty_directional_full_20260913T203556.parquet
