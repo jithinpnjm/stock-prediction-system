@@ -1,0 +1,1539 @@
+# Bank Nifty Intraday Price-Action Prediction System
+
+A reproducible quantitative research and ML platform for discovering, validating, and eventually serving intraday Bank Nifty SPOT price-action signals from 1-minute source data aggregated into 5-minute candles.
+
+> Research objective: determine whether the information available at the close of a completed 5-minute candle contains statistically robust, out-of-sample information about whether Bank Nifty will reach a favorable price objective before an adverse barrier, and whether the magnitude of the favorable move can be estimated well enough to select a dynamic target of 200 points or more.
+
+This repository is the canonical source of code, configuration, documentation, experiments, and reproducibility metadata. Large datasets, model artifacts, and experiment artifacts are stored outside Git through DVC and the Nebius shared filesystem.
+
+---
+
+## 1. Project objective
+
+Build a professional Financial Machine Learning (FinML) research platform that learns price-action structures from approximately five years of Bank Nifty SPOT intraday history and produces a trading decision only when the estimated edge is sufficiently strong.
+
+The system must not be treated as a generic next-candle predictor. The primary research target is an event/path prediction problem:
+
+- Trading instrument for the research model: Bank Nifty SPOT.
+- Source data: 1-minute candles owned by the project.
+- Modeling timeframe: 5-minute candles.
+- Trading/evaluation window: 09:30 to 15:00 IST.
+- Minimum favorable target: +200 points for long and -200 points for short.
+- Initial adverse stop: 70 points.
+- Time barrier: configurable and, at minimum, bounded by the remaining trading session.
+- Long label: +target is reached before -70.
+- Short label: -target is reached before +70.
+- If neither barrier is reached before the time barrier: timeout/no-event.
+- The production research system must support dynamic favorable targets above 200 when the magnitude model indicates sufficient expected movement and uncertainty is acceptably low.
+- The model must be allowed to return NO TRADE.
+
+The goal is not to maximize historical backtest profit. The goal is to establish whether a repeatable predictive signal survives strict out-of-sample validation, multiple-testing controls, realistic execution assumptions, and regime changes.
+
+---
+
+## 2. Core design principles
+
+1. **Point-in-time correctness.** Every feature for timestamp `t` must be computable using information available at or before `t` only.
+2. **No random train/test split for temporal research.** Use financial time-series validation, with purging and embargo where labels overlap.
+3. **Research before complexity.** Establish a strong statistical/LightGBM baseline before investing heavily in deep learning.
+4. **Many experiments are allowed; uncontrolled selection is not.** Thousands of training cycles are acceptable, but the number of trials must be tracked and overfitting diagnostics must account for repeated search.
+5. **No test-set tuning.** The final holdout remains untouched until the research program is frozen.
+6. **Same feature implementation for research and live inference.** Avoid training/live skew.
+7. **Store predictions, not only aggregate metrics.** Every prediction must be auditable.
+8. **Prefer calibrated probabilities to raw class labels.** The trading decision should be based on estimated probability and uncertainty.
+9. **Separate direction, trade quality, and movement magnitude.** Do not force one model to answer three different questions.
+10. **Start with Bank Nifty SPOT price action only.** Additional instruments/data can be introduced later as controlled experiments, never silently mixed into the baseline.
+
+---
+
+## 3. High-level platform architecture
+
+```text
+                         GitHub Repository
+              code / config / docs / CI / experiment specs
+                                  |
+                                  v
+                       GitHub Actions / Manual Runs
+                                  |
+                                  v
+                       +-------------------------+
+                       |    Nebius L40S VM       |
+                       |                         |
+Raw 1m data ----------> ingest / validate        |
+                       |       |                 |
+                       |       v                 |
+                       |   5m aggregation         |
+                       |       |                 |
+                       |       v                 |
+                       | feature + market-state  |
+                       | engines                  |
+                       |       |                 |
+                       |       v                 |
+                       | triple-barrier labels   |
+                       | MFE / MAE / timing      |
+                       |       |                 |
+                       |       v                 |
+                       | versioned dataset       |
+                       |       |                 |
+                       |       +--------+--------|
+                       |                |         |
+                       |                v         |
+                       |        MLflow Experiments|
+                       |                |         |
+                       |       +--------+--------+|
+                       |       |                 ||
+                       |       v                 v|
+                       |    LightGBM      TCN / Transformer
+                       |       |                 |
+                       |       +--------+--------+
+                       |                v
+                       |        ensemble / meta model
+                       |                |
+                       |                v
+                       |         dynamic target model
+                       |                |
+                       |                v
+                       |          event-driven backtest
+                       |                |
+                       |                v
+                       |   statistical validation + audit
+                       +-------------------------+
+                                  |
+                                  v
+                         Nebius Shared Filesystem
+                   datasets / models / MLflow artifacts /
+                   predictions / backtests / reports
+```
+
+---
+
+## 4. Repository structure
+
+Target structure:
+
+```text
+stock-prediction-system/
+|
++-- README.md
++-- LICENSE
++-- pyproject.toml
++-- uv.lock / poetry.lock                    # choose one; keep environment pinned
++-- Makefile
++-- .pre-commit-config.yaml
++-- .gitignore
++-- dvc.yaml
++-- dvc.lock
++|
++|-- configs/
+|   +-- data/
+|   +-- features/
+|   +-- labels/
+|   +-- regimes/
+|   +-- models/
+|   |   +-- lightgbm/
+|   |   +-- xgboost/
+|   |   +-- tcn/
+|   |   +-- transformer/
+|   +-- validation/
+|   +-- backtest/
+|   +-- experiments/
+|   +-- runtime/
+|
++-- src/
+|   +-- data/
+|   |   +-- ingest.py
+|   |   +-- validate.py
+|   |   +-- calendar.py
+|   |   +-- aggregate.py
+|   |   +-- schemas.py
+|   +-- features/
+|   |   +-- candles.py
+|   |   +-- clusters.py
+|   |   +-- swings.py
+|   |   +-- support_resistance.py
+|   |   +-- market_structure.py
+|   |   +-- opening_range.py
+|   |   +-- volatility.py
+|   |   +-- event_sampling.py
+|   |   +-- time_features.py
+|   +-- labels/
+|   |   +-- triple_barrier.py
+|   |   +-- mfe_mae.py
+|   |   +-- timing.py
+|   +-- regimes/
+|   |   +-- hmm.py
+|   |   +-- clustering.py
+|   +-- models/
+|   |   +-- baselines.py
+|   |   +-- lightgbm.py
+|   |   +-- xgboost.py
+|   |   +-- tcn.py
+|   |   +-- transformer.py
+|   |   +-- meta_label.py
+|   |   +-- magnitude.py
+|   |   +-- survival.py
+|   |   +-- ensemble.py
+|   +-- validation/
+|   |   +-- purged_cv.py
+|   |   +-- embargo.py
+|   |   +-- cpcv.py
+|   |   +-- calibration.py
+|   |   +-- statistical_tests.py
+|   |   +-- robustness.py
+|   +-- backtest/
+|   |   +-- engine.py
+|   |   +-- execution.py
+|   |   +-- portfolio.py
+|   |   +-- metrics.py
+|   +-- research/
+|   |   +-- pattern_mining.py
+|   |   +-- analogue_search.py
+|   |   +-- embeddings.py
+|   |   +-- feature_selection.py
+|   +-- mlops/
+|   |   +-- mlflow_utils.py
+|   |   +-- lineage.py
+|   |   +-- manifests.py
+|   |   +-- registry.py
+|   |   +-- reproducibility.py
+|   +-- cli/
+|
++-- pipelines/
+|   +-- 01_ingest.py
+|   +-- 02_validate.py
+|   +-- 03_aggregate_5m.py
+|   +-- 04_features.py
+|   +-- 05_labels.py
+|   +-- 06_build_dataset.py
+|   +-- 07_train.py
+|   +-- 08_validate.py
+|   +-- 09_backtest.py
+|   +-- 10_report.py
+|   +-- 11_register_model.py
+|
++-- notebooks/
+|   +-- exploratory/
+|   +-- diagnostics/
+|   +-- research/
+|   +-- reports/
+|
++-- tests/
+|   +-- unit/
+|   +-- data_quality/
+|   +-- leakage/
+|   +-- features/
+|   +-- labels/
+|   +-- backtest/
+|   +-- reproducibility/
+|
++-- docs/
+|   +-- architecture.md
+|   +-- data-contract.md
+|   +-- feature-catalog.md
+|   +-- labeling.md
+|   +-- validation.md
+|   +-- modeling.md
+|   +-- backtesting.md
+|   +-- mlops.md
+|   +-- operations.md
+|   +-- experiment-policy.md
+|
++-- reports/
+|   # small, reviewable summaries; large artifacts live on shared storage
+|
++-- data/
+|   # DVC pointers/manifests only; do not commit raw market data
+```
+
+---
+
+## 5. Data foundation
+
+### 5.1 Source and canonical data
+
+Raw 1-minute Bank Nifty SPOT data is the source of truth. Raw files are immutable. Never modify raw files in place.
+
+Canonical processing layers:
+
+```text
+RAW 1m
+  -> BRONZE validated 1m
+  -> SILVER canonical 5m
+  -> GOLD features + labels + training datasets
+```
+
+Preferred storage format: **Parquet**.
+
+Primary tooling:
+
+- Polars for high-performance dataframe transformations.
+- PyArrow for Parquet/schema handling.
+- DuckDB for analytical queries over Parquet.
+- DVC for dataset versioning and reproducibility.
+
+### 5.2 Five-minute aggregation
+
+Construct standard 5-minute candles aligned to the Bank Nifty session, e.g.:
+
+```text
+09:15
+09:20
+09:25
+09:30
+...
+14:55
+15:00
+```
+
+Exact exchange-session/calendar rules must be encoded, tested, and versioned. Timezone must be Asia/Kolkata in market data processing. The project's operational timezone (e.g. Europe/Berlin) is separate and must never be used implicitly for market timestamps.
+
+Do not discard 1-minute data after aggregation. It remains necessary for:
+
+- intrabar sequencing of target/stop hits;
+- resolving cases where 5-minute OHLC contains both barriers;
+- future feature research;
+- execution realism;
+- data-quality validation.
+
+### 5.3 Data-quality gates
+
+Every dataset build must validate:
+
+- duplicate timestamps;
+- missing/extra timestamps;
+- trading holidays and session boundaries;
+- timezone correctness;
+- monotonic timestamps;
+- `low <= open/close <= high`;
+- non-negative range;
+- suspicious zero/stale candles;
+- unexpected gaps;
+- source revisions if applicable;
+- schema and dtype consistency;
+- no forward-filled price information unless explicitly justified;
+- no future information entering point-in-time features.
+
+A dataset failing a critical gate must not be trainable.
+
+---
+
+## 6. Point-in-time feature architecture
+
+The feature engine must support an `as_of_timestamp` concept. A feature at time `t` can only access observations with event timestamps <= `t`.
+
+### 6.1 Candle geometry
+
+For each 5-minute candle derive:
+
+- body;
+- high-low range;
+- upper wick;
+- lower wick;
+- body/range;
+- wick/range;
+- close location within candle;
+- candle direction;
+- gap/return;
+- normalized values such as body/ATR and range/ATR.
+
+Absolute price should not dominate the representation. Prefer normalized distances and returns where possible.
+
+### 6.2 Consecutive candle clusters
+
+Explicitly investigate clusters of:
+
+```text
+1, 2, 3, 4, 5, 6, 7, 8, 9, 10 candles
+```
+
+at rolling positions throughout the session.
+
+For each cluster derive structural descriptors rather than relying only on literal OHLC values:
+
+- net return;
+- total range;
+- directional efficiency;
+- number/proportion bullish and bearish candles;
+- largest body/range;
+- wick statistics;
+- cluster high/low breakout;
+- close relative to cluster range;
+- compression/expansion;
+- internal trend structure;
+- reversal signatures;
+- inside/outside bars;
+- failed breakout/rejection behavior.
+
+### 6.3 Non-consecutive pattern families
+
+The research engine may test other structured sampling families, including:
+
+- same minute across historical days;
+- fixed offsets from session open;
+- opening-range substructures;
+- event-driven windows;
+- recurrence/similarity search;
+- selected alternate-candle structures.
+
+Avoid unrestricted arbitrary subsets of candles. Millions of unconstrained combinations create extreme multiple-testing and false-discovery risk. Any pattern search must be tracked as a formal experiment family and evaluated with out-of-sample statistical controls.
+
+### 6.4 Market structure
+
+Algorithmically identify:
+
+- swing highs/lows;
+- higher-high / higher-low / lower-high / lower-low sequences;
+- recent important swings;
+- trend legs;
+- break of structure;
+- change of character/reversal candidates;
+- range/box structures;
+- compression and expansion;
+- breakout and failed breakout;
+- breakout-retest-continuation;
+- support and resistance zones.
+
+Support/resistance should be represented as zones with attributes such as:
+
+```text
+zone center
+zone width
+age
+number of touches
+rejection count
+prior breakout/retest information
+strength/confidence
+```
+
+Useful normalized features include distance to structure divided by current volatility/ATR.
+
+### 6.5 Opening and session structure
+
+Derive:
+
+- day open;
+- previous day open/high/low/close;
+- previous-day range;
+- previous-day return;
+- overnight/gap distance where valid;
+- opening range for multiple candidate windows;
+- breakout/failure of opening range;
+- session high/low so far;
+- distance to intraday extremes;
+- VWAP only if treated as a derived price-action reference and validated independently (do not assume it adds value).
+
+### 6.6 Time features
+
+Use:
+
+- minute of session;
+- minutes since open;
+- minutes until session close;
+- session phase;
+- weekday;
+- month/quarter where justified;
+- cyclical encodings where appropriate.
+
+Time-of-day should be modeled explicitly because the same price structure can have different opportunity sets at different times.
+
+### 6.7 Volatility and compression/expansion
+
+Potential features:
+
+- ATR and normalized ATR;
+- realized volatility;
+- rolling range;
+- volatility acceleration;
+- range compression;
+- expansion rate;
+- recent move magnitude;
+- gap/impulse state.
+
+Test both conventional and robust volatility estimators.
+
+### 6.8 Event-driven sampling
+
+Experiment with event samplers such as CUSUM-style filters in addition to regular 5-minute observations. The purpose is to reduce redundant samples and focus some research on meaningful price events. Keep regular sampling as the baseline so any claimed improvement is measurable.
+
+### 6.9 Fractional differentiation
+
+Fractionally differentiated price/return representations may be tested where they improve stationarity without destroying predictive memory. This is an experiment, not an assumption. Retain only if robust OOS evidence supports it.
+
+### 6.10 1-minute microstructure-inside-5-minute features
+
+Keep a dedicated research track that uses the source 1-minute data to characterize what happened inside each 5-minute bar, for example:
+
+- order-of-extremes sequence (`high-first` vs `low-first` where observable);
+- intrabar range path;
+- acceleration/deceleration;
+- number of directional 1-minute bars;
+- intrabar rejection;
+- target/stop ordering;
+- micro-trend efficiency.
+
+This must be carefully timestamped so the feature is only included when it is actually known at 5-minute close.
+
+---
+
+## 7. Labeling framework
+
+### 7.1 Triple-barrier labels
+
+Primary labels follow the triple-barrier concept:
+
+```text
+             favorable barrier
+                    |
+                    |
+entry ---------------+---------------
+                    |
+                    |
+             adverse barrier
+
+plus a time barrier / session boundary
+```
+
+For each candidate timestamp create labels for both directions.
+
+Baseline:
+
+```text
+LONG:  +200 before -70
+SHORT: -200 before +70
+```
+
+Also generate configurable target ladders:
+
+```text
+200 / 250 / 300 / 350 / 400 / 500 / ...
+```
+
+### 7.2 MFE / MAE
+
+For every event store:
+
+- maximum favorable excursion (MFE);
+- maximum adverse excursion (MAE);
+- time to favorable barrier;
+- time to adverse barrier;
+- maximum future excursion available within the session;
+- realized path and barrier ordering where required.
+
+These support dynamic target selection and trade-quality research.
+
+### 7.3 Label metadata
+
+Each sample should have:
+
+```text
+event_start_time
+event_end_time
+label_horizon
+barrier_type
+upper_barrier
+lower_barrier
+direction
+label
+```
+
+This metadata is required by purged validation.
+
+---
+
+## 8. Modeling strategy
+
+Use a layered model stack rather than one monolithic predictor.
+
+### 8.1 Model A — Direction / primary model
+
+Goal:
+
+```text
+P(+200 before -70 | information available now)
+P(-200 before +70 | information available now)
+```
+
+Models to benchmark:
+
+1. Logistic regression — sanity baseline.
+2. LightGBM — primary tabular candidate.
+3. XGBoost — benchmark.
+4. CatBoost — benchmark where appropriate.
+
+LightGBM is expected to be the central structured-feature baseline because this problem is dominated initially by tabular price-action and market-state features. The official LightGBM documentation supports GPU/CUDA builds on Linux, allowing the L40S to accelerate large experiment sweeps where useful. Do not force GPU usage when CPU is faster for a given experiment.
+
+### 8.2 Model B — Sequence encoder
+
+Input examples:
+
+```text
+last 12 x 5m candles
+last 24 x 5m candles
+last 48 x 5m candles
+```
+
+Candidate architectures:
+
+- TCN;
+- Transformer Encoder;
+- PatchTST / related time-series Transformer variants as controlled experiments;
+- LSTM/GRU only as a benchmark, not as a default assumption.
+
+Start with TCN and compare against Transformer models. Financial forecasting literature contains extensive use of RNNs, CNNs, attention/hybrid models, and more recent Transformer variants, but reported forecasting improvements do not automatically translate into tradable or robust OOS edge. Therefore every architecture must beat the baseline under identical leakage-safe validation.
+
+### 8.3 Model C — Regime model
+
+Use unsupervised/latent-state methods to describe market condition:
+
+- Hidden Markov Model;
+- Gaussian mixture / clustering;
+- potentially hidden semi-Markov methods later.
+
+Possible regime states include trend, range, compression, expansion, high-volatility and reversal-like states. Do not hard-code semantic interpretations until the discovered states are mapped and validated.
+
+The regime model outputs probabilities/features that become inputs to the supervised model.
+
+### 8.4 Model D — Meta-labeling / trade-quality model
+
+Separate:
+
+> Is the directional hypothesis correct?
+
+from:
+
+> Should we actually take this trade?
+
+A primary direction model can produce a candidate side. A meta-model then predicts whether taking that candidate has sufficient expected value after considering the current market context.
+
+Meta-model inputs can include:
+
+- primary probability;
+- opposite-side probability;
+- model disagreement;
+- regime probabilities;
+- pattern-engine probability;
+- analogue-search probability;
+- structural features;
+- volatility;
+- expected MFE;
+- estimated uncertainty.
+
+Output:
+
+```text
+P(trade succeeds | candidate side + context)
+```
+
+### 8.5 Model E — Magnitude / MFE model
+
+Predict the distribution of favorable excursion.
+
+Examples:
+
+```text
+P(MFE >= 200)
+P(MFE >= 250)
+P(MFE >= 300)
+P(MFE >= 400)
+P(MFE >= 500)
+```
+
+Also test direct quantile regression and MFE regression.
+
+This model drives dynamic target selection.
+
+Example conceptual output:
+
+```text
+P(MFE >= 200) = 0.84
+P(MFE >= 300) = 0.65
+P(MFE >= 400) = 0.39
+```
+
+The actual target thresholds must be optimized only within validation data and then frozen.
+
+### 8.6 Model F — Survival / hazard model
+
+Investigate a discrete-time survival/hazard formulation:
+
+```text
+P(target reached by 5m)
+P(target reached by 10m)
+P(target reached by 15m)
+...
+```
+
+This can estimate not only whether a move occurs, but how likely it is to occur within a useful holding interval.
+
+This is a research branch and must earn inclusion through OOS results.
+
+### 8.7 Historical analogue engine
+
+For the current sequence, search historical samples for structurally similar price-action sequences.
+
+```text
+current sequence
+      |
+      v
+nearest historical sequences
+      |
+      v
+future path distributions
+```
+
+Outputs can include:
+
+- historical target-hit probabilities;
+- MFE/MAE distributions;
+- time-to-move distributions;
+- regime-conditional analogue statistics.
+
+This becomes an independent ensemble signal rather than a hard rule.
+
+### 8.8 Pattern discovery / embeddings
+
+Research a price-action representation in which similar sequences map to nearby embeddings. Cluster the embeddings to discover pattern families such as:
+
+- compression -> expansion;
+- failed breakout -> reversal;
+- range -> breakout -> retest;
+- impulse -> consolidation -> continuation.
+
+Literal patterns can be highly redundant. Group structurally similar patterns to reduce dimensionality and multiple-testing burden.
+
+---
+
+## 9. Final ensemble architecture
+
+Target architecture, subject to evidence from experiments:
+
+```text
+                      CURRENT 5m MARKET STATE
+                                |
+              +-----------------+------------------+
+              |                 |                  |
+              v                 v                  v
+       Feature Engine     Sequence Encoder     Pattern Engine
+       price-action       TCN/Transformer      embeddings/analogue
+              |                 |                  |
+              +-----------------+------------------+
+                                |
+                         Regime probabilities
+                                |
+                                v
+                           LightGBM / GBM
+                                |
+                    primary directional signal
+                                |
+                  +-------------+-------------+
+                  |                           |
+                  v                           v
+             Meta-model                  MFE model
+            trade / no trade          movement size
+                  |                           |
+                  +-------------+-------------+
+                                v
+                       Dynamic target engine
+                                |
+                                v
+                           Risk / execution
+                                |
+                   LONG / SHORT / NO TRADE
+```
+
+A stacked meta-model should learn how much weight to assign to component predictions. Do not manually choose weights unless a controlled baseline demonstrates that manual weighting is superior.
+
+---
+
+## 10. Dynamic target policy
+
+The strategy must distinguish entry confidence from movement confidence.
+
+### Entry confidence
+
+Concerned with:
+
+```text
+Is the direction/event likely to occur?
+```
+
+### Movement confidence
+
+Concerned with:
+
+```text
+How much favorable excursion is likely after entry?
+```
+
+Conceptual decision flow:
+
+```text
+candidate setup
+  -> direction probability
+  -> trade-quality probability
+  -> MFE distribution
+  -> uncertainty
+  -> target selection
+```
+
+Minimum target is always 200. Larger targets such as 250/300/400/500+ are allowed only when the magnitude evidence supports them under the frozen target-selection policy.
+
+The model must never increase target size merely because directional confidence is high.
+
+---
+
+## 11. Validation methodology
+
+This is a critical part of the platform.
+
+### 11.1 Chronological data split
+
+A proposed initial structure is:
+
+```text
+Historical development
+    |
+    +-- train/validation research window
+    |
+    +-- walk-forward evaluations
+    |
+    +-- CPCV robustness analysis
+    |
+    +-- final untouched OOS holdout
+```
+
+Exact dates depend on the actual dataset coverage and must be recorded from the source files rather than assumed.
+
+### 11.2 Purged validation
+
+Because labels span future intervals, ordinary K-fold can leak information between overlapping events.
+
+Use Purged K-Fold style logic based on each sample's information interval, removing training observations that overlap the test label interval.
+
+### 11.3 Embargo
+
+Apply an embargo around test periods to reduce leakage from serial dependence and closely adjacent observations.
+
+The embargo length should be linked to the maximum effective label horizon rather than selected for cosmetic effect.
+
+### 11.4 CPCV
+
+Use Combinatorial Purged Cross-Validation for robustness after the basic pipeline is stable. CPCV can generate multiple train/test paths and is specifically valuable when many strategy/model configurations are tested.
+
+Recent research comparing OOS methods under controlled conditions has found CPCV useful for mitigating backtest overfitting relative to simpler walk-forward approaches, especially when combined with PBO/DSR analysis.
+
+### 11.5 Final holdout
+
+The final out-of-sample period must be:
+
+- never used for feature selection;
+- never used for hyperparameter tuning;
+- never used to choose the final model family;
+- never repeatedly inspected and retuned.
+
+If the final holdout is used to make a modeling decision, it ceases to be a true final holdout and must be reclassified.
+
+---
+
+## 12. Anti-overfitting and statistical audit
+
+Because this project explicitly permits thousands of training cycles and large pattern searches, the research program must treat model selection as a multiple-testing problem.
+
+Required audit components:
+
+- number of experiments/trials;
+- parameter-search history;
+- best-vs-median trial behavior;
+- Probability of Backtest Overfitting (PBO), where applicable;
+- Deflated Sharpe Ratio (DSR), where applicable;
+- Monte Carlo / permutation robustness tests;
+- regime-conditional performance;
+- year-by-year performance;
+- subperiod performance;
+- trade-count thresholds;
+- bootstrap confidence intervals where appropriate;
+- sensitivity to realistic slippage/cost assumptions.
+
+A model that wins only after thousands of searches must face a substantially higher burden of evidence than a pre-specified model.
+
+Do not report the best backtest without recording the full search history.
+
+---
+
+## 13. Evaluation metrics
+
+### Statistical/ML metrics
+
+- ROC AUC where appropriate;
+- PR AUC for imbalance;
+- log loss;
+- Brier score;
+- calibration error;
+- reliability curve;
+- precision/recall by probability bucket;
+- confusion matrix for diagnostic use only.
+
+### Trading metrics
+
+- expectancy;
+- average R;
+- median R;
+- win rate;
+- profit factor;
+- Sharpe;
+- Sortino;
+- Calmar;
+- maximum drawdown;
+- drawdown duration;
+- tail loss statistics;
+- daily/monthly consistency;
+- trades/day;
+- exposure time;
+- average holding time;
+- target distribution;
+- MAE/MFE distribution.
+
+Accuracy alone must never be used as the primary go/no-go metric.
+
+---
+
+## 14. Execution-aware backtesting
+
+The event-driven backtester must account for:
+
+- signal generated only after a completed candle is available;
+- actual next-action entry convention;
+- spread/slippage assumptions;
+- execution delay;
+- trading costs/fees where applicable;
+- target/stop ordering inside future bars;
+- session close behavior;
+- no new trades outside 09:30–15:00;
+- configurable last-entry cutoff;
+- one-position/multi-position constraints according to future strategy specification.
+
+The 1-minute source data should be used to resolve path ordering wherever 5-minute OHLC is ambiguous.
+
+Do not assume that `high >= target` means target was hit before `low <= stop` when both occur inside the same 5-minute bar.
+
+---
+
+## 15. MLOps stack
+
+### Core stack
+
+| Area | Technology |
+|---|---|
+| Source control | GitHub |
+| CI/CD | GitHub Actions |
+| Environment | pinned Python + lockfile |
+| Containers | Docker |
+| Dataset versioning | DVC |
+| Tabular processing | Polars / PyArrow |
+| Analytical query layer | DuckDB |
+| Experiment tracking | MLflow |
+| Model registry | MLflow Model Registry |
+| Hyperparameter optimization | Optuna |
+| Configuration | Hydra |
+| ML | LightGBM / XGBoost / PyTorch |
+| Sequence DL | TCN / Transformer family |
+| Explainability | SHAP + model-specific attribution |
+| Metrics | Prometheus-compatible where operational monitoring is added |
+| Visualization | Jupyter / matplotlib / Plotly as appropriate |
+| Compute | Nebius VM with NVIDIA L40S |
+| Artifact/data storage | Nebius shared filesystem |
+| Pipeline orchestration | initially scripts/Make targets; Prefect or Dagster later if justified |
+
+Avoid adding heavyweight infrastructure merely for appearance. Every platform component must solve a reproducibility, reliability, or operational problem.
+
+---
+
+## 16. Nebius storage layout
+
+Recommended shared filesystem layout:
+
+```text
+/mnt/banknifty/
+|
++-- raw/
+|   +-- 1m/
+|
++-- bronze/
+|   +-- validated_1m/
+|
++-- silver/
+|   +-- 5m/
+|
++-- gold/
+|   +-- features/
+|   +-- labels/
+|   +-- datasets/
+|
++-- models/
+|
++-- experiments/
+|
++-- predictions/
+|
++-- backtests/
+|
++-- reports/
+|
++-- mlruns/
+|
++-- cache/
+```
+
+Use local VM disk/NVMe for temporary computation/cache where appropriate and shared FS for durable artifacts.
+
+Raw source data should be immutable.
+
+---
+
+## 17. Dataset/version manifest
+
+Every trainable dataset must carry a manifest containing at least:
+
+```yaml
+ dataset_id: banknifty_5m_v001
+ source_symbol: BANKNIFTY_SPOT
+ source_timeframe: 1m
+ modeling_timeframe: 5m
+ timezone: Asia/Kolkata
+ start: YYYY-MM-DD
+ end: YYYY-MM-DD
+
+ feature_version: price_action_v001
+ market_structure_version: ms_v001
+ regime_version: regime_v001
+
+ label:
+   method: triple_barrier
+   target: 200
+   stop: 70
+   time_barrier: session_end_or_configured_horizon
+
+ git_commit: <sha>
+ source_manifest_hash: <hash>
+ dataset_content_hash: <sha256>
+ created_at: <timestamp>
+```
+
+The actual values must be generated by the pipeline rather than hand-entered after the fact.
+
+---
+
+## 18. MLflow experiment design
+
+Every run should capture:
+
+### Identity
+
+```text
+experiment_id
+run_id
+git_commit
+dataset_version
+feature_version
+label_version
+container/image version
+Python version
+CUDA version
+GPU type
+random seeds
+```
+
+### Parameters
+
+```text
+model family
+hyperparameters
+feature groups
+sequence length
+training window
+CV settings
+embargo
+objective
+class weights
+sampling parameters
+```
+
+### Metrics
+
+```text
+ML metrics
+calibration metrics
+trading metrics
+robustness metrics
+PBO / DSR outputs
+```
+
+### Artifacts
+
+```text
+model artifact
+feature schema
+predictions.parquet
+trades.parquet
+backtest results
+confusion/reliability plots
+feature importance / SHAP outputs
+resolved config
+training logs
+```
+
+Store enough information to reproduce the run without relying on notebook state.
+
+---
+
+## 19. Model registry and lineage
+
+Model lifecycle:
+
+```text
+Candidate
+   -> Validated
+   -> Champion
+   -> Archived
+```
+
+Maintain lineage such as:
+
+```text
+ensemble_v027
+ |
+ +-- direction_lgbm_v081
+ +-- sequence_tcn_v019
+ +-- pattern_engine_v012
+ +-- meta_model_v007
+ +-- mfe_model_v015
+ +-- regime_model_v006
+ |
+ +-- feature_set_v031
+ +-- dataset_v017
+ +-- label_v005
+ +-- git_sha_a81f...
+```
+
+Do not overwrite artifacts in place. New research results get a new version.
+
+---
+
+## 20. Experiment governance for thousands of runs
+
+The project explicitly allows thousands of training cycles to eliminate poor hypotheses. To prevent search-induced overfitting:
+
+1. Every run receives a unique experiment/run ID.
+2. Search space, objective, validation scheme, and trial count are recorded.
+3. Test periods are inaccessible to automated hyperparameter search.
+4. The full trial history is retained.
+5. Best-run selection must include robustness/OOS criteria, not only the maximum backtest metric.
+6. The number of tried configurations contributes to the statistical audit.
+7. Experiments are grouped into families, e.g. `cluster_v3`, `tcn_v5`, `regime_v2`, so family-level multiple-testing can be reviewed.
+8. A model cannot become Champion solely because it has the highest historical Sharpe among many trials.
+
+The goal of repeated training is not to keep training until a lucky backtest appears. The goal is to map the research space and reject bad hypotheses while maintaining honest OOS evidence.
+
+---
+
+## 21. Reproducibility and environment management
+
+A complete experiment identity should be reproducible from:
+
+```text
+Git commit
++
+DVC dataset version
++
+configuration
++
+container image / lockfile
++
+random seed
++
+model artifact
+```
+
+The project should support rebuilding the dataset and re-running the experiment on a fresh Nebius GPU VM.
+
+Record hardware/software metadata, especially for deep-learning runs:
+
+- GPU model;
+- driver/CUDA version;
+- PyTorch version;
+- compiler/runtime where relevant;
+- CPU/RAM;
+- training duration;
+- peak GPU memory.
+
+---
+
+## 22. CI/CD strategy
+
+### Pull request CI
+
+Run inexpensive checks:
+
+- formatting/linting;
+- type checking;
+- unit tests;
+- schema tests;
+- data-contract tests;
+- leakage tests;
+- small deterministic smoke backtest;
+- reproducibility smoke test.
+
+### Manual expensive workflows
+
+Use GitHub Actions manual dispatch for:
+
+- full dataset rebuild;
+- feature generation;
+- LightGBM sweeps;
+- TCN training;
+- Transformer training;
+- CPCV;
+- full backtest;
+- research report generation;
+- model registration.
+
+The GPU is an expensive research resource. Do not automatically launch full training on every push.
+
+---
+
+## 23. Observability for the ML platform
+
+For the Nebius training environment, monitor where useful:
+
+- GPU utilization;
+- VRAM usage;
+- GPU temperature/power;
+- CPU utilization;
+- RAM;
+- filesystem capacity/throughput;
+- training duration;
+- failed jobs;
+- MLflow availability;
+- dataset pipeline duration.
+
+The infrastructure should fail loudly when storage or dataset capacity approaches operational limits.
+
+---
+
+## 24. Research experiment roadmap
+
+### Experiment 000 — Data integrity
+
+Deliver validated 1-minute and canonical 5-minute datasets.
+
+### Experiment 001 — Triple-barrier baseline
+
+No sophisticated features. Establish the empirical base rate of the 200/-70 event.
+
+### Experiment 002 — Candle geometry + logistic regression
+
+Sanity-check whether basic candle features contain measurable information.
+
+### Experiment 003 — Candle geometry + LightGBM
+
+Establish the main tabular baseline.
+
+### Experiment 004 — Clusters 1–10
+
+Add consecutive cluster features and quantify incremental OOS value.
+
+### Experiment 005 — Market structure
+
+Add swings, HH/HL/LH/LL, SR zones, breakouts, reversals, boxes, compression/expansion.
+
+### Experiment 006 — Session context
+
+Add opening-range, prior-day structure, session extremes, time-of-day.
+
+### Experiment 007 — Regime model
+
+Add HMM/clustering regime probabilities.
+
+### Experiment 008 — Pattern/analogue engine
+
+Add historical nearest-neighbour/sequence similarity signals.
+
+### Experiment 009 — TCN
+
+Train sequence representation on L40S.
+
+### Experiment 010 — Transformer family
+
+Controlled deep sequence benchmark.
+
+### Experiment 011 — Hybrid ensemble
+
+Combine LightGBM + TCN/Transformer + analogue/pattern + regime.
+
+### Experiment 012 — Meta-labeling
+
+Add trade-quality model.
+
+### Experiment 013 — MFE / magnitude
+
+Add dynamic target estimation.
+
+### Experiment 014 — Survival/hazard
+
+Test time-aware movement probability.
+
+### Experiment 015 — Dynamic target policy
+
+Target ladder 200+ using frozen probability/uncertainty rules validated OOS.
+
+### Experiment 016 — Execution realism
+
+Add slippage, costs, timing and intrabar path resolution.
+
+### Experiment 017 — Full robustness audit
+
+CPCV + PBO + DSR + Monte Carlo/permutation + regime stability.
+
+### Experiment 018 — Final holdout
+
+One locked final OOS evaluation.
+
+Only after the above can the project progress toward paper trading/live-signal infrastructure.
+
+---
+
+## 25. Research questions to actively investigate
+
+The project should maintain an explicit research backlog around questions such as:
+
+- Do 1–10 consecutive 5-minute candle structures have stable predictive information?
+- Which cluster lengths carry the most information?
+- Are some structures only useful during specific regimes?
+- Does the same minute-of-day across historical sessions carry useful conditional information?
+- Does previous-day structure materially improve event prediction?
+- Does opening-range behavior add incremental information after controlling for basic price action?
+- Are support/resistance zones predictive only near specific volatility regimes?
+- Does compression-to-expansion behavior predict larger favorable excursion?
+- Do failed breakouts carry more information than ordinary breakouts?
+- Can sequence models learn useful representations beyond engineered structure?
+- Does an analogue engine add information not already captured by LightGBM?
+- Does a TCN/Transformer add OOS information over LightGBM?
+- Does regime conditioning improve calibration or only historical PnL?
+- Can MFE be predicted sufficiently well to justify targets above 200?
+- Is there a relationship between predicted movement confidence and realized MFE?
+- How stable are signals across years and market regimes?
+- What happens when all features are deliberately perturbed/noised?
+- Which signals survive transaction-cost/slippage assumptions?
+
+---
+
+## 26. Financial models to prioritize
+
+Priority order for initial research:
+
+```text
+1. Logistic Regression            sanity baseline
+2. LightGBM                       primary structured model
+3. XGBoost                        benchmark
+4. HMM + clustering               regime state
+5. TCN                            first GPU sequence model
+6. Transformer family             deep temporal benchmark
+7. Historical analogue/kNN        independent signal
+8. Meta-labeling                  trade-quality filter
+9. MFE/quantile model             dynamic target
+10. Survival/hazard               time-aware movement model
+11. Ensemble/stacking              final fusion
+12. Reinforcement learning         deferred until predictive edge is demonstrated
+```
+
+Reinforcement learning is intentionally deferred. It introduces a much larger policy/reward search space and should not be used to manufacture an apparent edge before supervised/event-prediction models establish whether predictive information exists.
+
+---
+
+## 27. Why the project should be event-prediction rather than next-candle prediction
+
+A next-candle classifier can be statistically accurate but economically useless. The trading objective is path-dependent:
+
+```text
+Entry
+ |
+ +---- target reached first -> win
+ |
+ +---- stop reached first   -> loss
+ |
+ +---- neither               -> timeout
+```
+
+The model should therefore learn the probability of a meaningful event and the distribution of favorable/adverse excursion rather than simply forecasting the next close.
+
+---
+
+## 28. Production/live architecture — future phase
+
+Only after research validation:
+
+```text
+Market data
+    |
+    v
+5m candle builder
+    |
+    v
+same Feature Engine used in training
+    |
+    v
+same model versions from registry
+    |
+    v
+prediction
+    |
+    +--> direction
+    +--> meta probability
+    +--> MFE / target
+    +--> uncertainty
+    |
+    v
+risk / execution policy
+    |
+    v
+signal / order adapter
+```
+
+Live inference must record:
+
+```text
+timestamp
+model versions
+feature versions
+input snapshot/hash
+predictions
+signal
+selected target
+uncertainty
+actual outcome
+```
+
+This creates the feedback loop for subsequent research without changing historical labels after the fact.
+
+---
+
+## 29. Required first milestone
+
+Do not begin with deep learning.
+
+The first milestone is:
+
+```text
+1m raw
+  |
+  v
+validated 1m
+  |
+  v
+canonical 5m
+  |
+  v
+point-in-time feature foundation
+  |
+  v
+triple-barrier labels
+  |
+  v
+MFE/MAE labels
+  |
+  v
+DVC versioned dataset
+  |
+  v
+Purged + embargoed validation framework
+  |
+  v
+LightGBM baseline
+  |
+  v
+initial event-driven backtest
+  |
+  v
+MLflow experiment + reproducibility report
+```
+
+Success at this stage means the research infrastructure is trustworthy, not that the strategy is already profitable.
+
+---
+
+## 30. Definition of done for a candidate model
+
+A candidate can be considered for promotion only when all applicable checks pass:
+
+- no known data leakage;
+- reproducible from Git + DVC + config;
+- calibration evaluated;
+- sufficient OOS sample count;
+- performance stable across multiple temporal folds;
+- robust under purged/embargoed validation;
+- survives CPCV/robustness analysis where appropriate;
+- acceptable year/regime/subperiod stability;
+- realistic execution assumptions tested;
+- multiple-testing/search history documented;
+- PBO/DSR or equivalent statistical audit completed when applicable;
+- prediction artifacts retained;
+- model/data lineage recorded;
+- final decision reviewed before registry promotion.
+
+---
+
+## 31. External methodology notes
+
+This project deliberately incorporates ideas from modern Financial Machine Learning and time-series research rather than treating stock prediction as a conventional iid classification problem.
+
+Relevant methodological areas include:
+
+- triple-barrier labeling;
+- meta-labeling;
+- purged cross-validation;
+- embargoing;
+- combinatorial purged cross-validation;
+- backtest-overfitting analysis;
+- Deflated Sharpe Ratio;
+- Probability of Backtest Overfitting;
+- event-based sampling;
+- calibrated probabilistic modeling;
+- sequence representation learning.
+
+Recent literature continues to evaluate CNN/RNN/attention/Transformer approaches for financial series while also emphasizing non-stationarity, low signal-to-noise, and the gap between statistical forecasting quality and actionable trading performance. These are reasons to benchmark multiple model families under identical leakage-safe procedures rather than preselecting a neural architecture.
+
+Selected references:
+
+- López de Prado, *Advances in Financial Machine Learning* — foundational framework for financial labeling, validation and backtest-overfitting controls.
+- Hudson & Thames / MLFinLab reference implementations for purged CV concepts.
+- Recent surveys of deep learning for financial time series and 2026 reviews of AI/Transformer approaches, which reinforce the need for rigorous OOS testing and caution against equating forecast metrics with tradability.
+- LightGBM documentation for current GPU/CUDA support on Linux.
+
+Web research used in drafting this plan included current documentation/reviews available in September 2026. Examples: recent financial ML/backtest-overfitting research supports CPCV/PBO/DSR-style controls; recent reviews emphasize non-stationarity and the gap between predictive metrics and trading performance; LightGBM's current documentation describes CUDA GPU support on Linux.
+
+---
+
+## 32. Project philosophy
+
+The system is intentionally designed so that the easiest thing to do is **not** to fool ourselves.
+
+The research loop is:
+
+```text
+Hypothesis
+   -> dataset
+   -> feature definition
+   -> label definition
+   -> leakage-safe training
+   -> validation
+   -> backtest
+   -> statistical audit
+   -> reproducibility
+   -> accept / reject hypothesis
+```
+
+A fancy model with weak validation is a failed experiment.
+
+A simpler model with stable, calibrated, reproducible OOS information is a successful research result.
+
+The final objective is not the most complicated AI model. It is the most defensible system we can demonstrate from the available data.
