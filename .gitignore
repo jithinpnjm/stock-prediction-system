@@ -1,2 +1,38 @@
-.venv
-.dvc
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*
+*credential*
+*secret*
+*token*
+*auth*
+
+# DVC / ML artifacts
+.dvc/cache/
+.mlflow/
+mlruns/
+*.model
+*.pkl
+*.pickle
+*.joblib
+
+# Local data and generated artifacts
+logs/
+artifacts/
+outputs/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
