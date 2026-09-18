@@ -17,11 +17,11 @@ class PurgedWalkForwardSplit:
         n_splits: int = 5,
         *,
         embargo: pd.Timedelta = pd.Timedelta(minutes=5),
-        test_fraction: float | None = None,
     ) -> None:
+        if n_splits < 1:
+            raise ValueError("n_splits must be >= 1")
         self.n_splits = n_splits
         self.embargo = embargo
-        self.test_fraction = test_fraction
 
     def split(
         self,
@@ -34,20 +34,19 @@ class PurgedWalkForwardSplit:
         if n == 0:
             return
         block = max(1, n // (self.n_splits + 1))
+        gap_ns = int(self.embargo.total_seconds() * 1e9)
+
         for i in range(self.n_splits):
-            test_start = (i + 1) * block
-            test_end = n if i == self.n_splits - 1 else min(n, (i + 2) * block)
-            test_idx = np.arange(test_start, test_end, dtype=int)
+            test_start_idx = (i + 1) * block
+            test_end_idx = n if i == self.n_splits - 1 else min(n, (i + 2) * block)
+            test_idx = np.arange(test_start_idx, test_end_idx, dtype=int)
             if len(test_idx) == 0:
                 continue
-            cutoff = starts[test_idx[0]]
-            test_right = starts[test_idx[-1]]
-            gap_ns = int(self.embargo.total_seconds() * 1e9)
+
+            test_start_time = starts[test_idx[0]]
             train = np.arange(0, test_idx[0], dtype=int)
-            train = train[ends[train] < cutoff]
-            train = train[starts[train] < cutoff - gap_ns]
-            # No post-test training samples are used in walk-forward CV.
-            _ = test_right
+            train = train[ends[train] < test_start_time]
+            train = train[starts[train] < test_start_time - gap_ns]
             if len(train):
                 yield train, test_idx
 
@@ -60,6 +59,8 @@ class CombinatorialPurgedCV:
         *,
         embargo: pd.Timedelta = pd.Timedelta(minutes=5),
     ) -> None:
+        if n_groups < 2:
+            raise ValueError("n_groups must be >= 2")
         if n_test_groups <= 0 or n_test_groups >= n_groups:
             raise ValueError("n_test_groups must be between 1 and n_groups-1")
         self.n_groups = n_groups
@@ -80,18 +81,16 @@ class CombinatorialPurgedCV:
         for selected in combinations(range(self.n_groups), self.n_test_groups):
             test_idx = np.concatenate([groups[i] for i in selected])
             test_idx.sort()
-            test_start = starts[test_idx].min()
-            test_end = starts[test_idx].max()
-            mask = np.ones(n, dtype=bool)
-            mask[test_idx] = False
+            test_intervals = [(starts[i], starts[i]) for i in test_idx]
 
-            # Purge any event whose information interval overlaps the test interval.
-            mask &= ends < test_start
-            # Also remove events in the embargo window immediately before the test.
-            mask &= starts < (test_start - gap_ns)
-            # And remove events after the test block's end.
-            mask &= starts > (test_end + gap_ns)
-            train_idx = np.flatnonzero(mask)
+            keep = np.ones(n, dtype=bool)
+            keep[test_idx] = False
+            for left, right in test_intervals:
+                keep &= ~(
+                    (ends >= left)
+                    & (starts <= right + gap_ns)
+                )
 
+            train_idx = np.flatnonzero(keep)
             if len(train_idx):
                 yield train_idx, test_idx

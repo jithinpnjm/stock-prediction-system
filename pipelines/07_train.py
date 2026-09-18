@@ -9,6 +9,7 @@ import lightgbm as lgb
 import mlflow
 import numpy as np
 import polars as pl
+import pandas as pd
 from sklearn.metrics import log_loss
 
 from src.common.config import load_yaml
@@ -35,12 +36,7 @@ def run() -> None:
 
     frame = pl.read_parquet("data/ml/training_frame.parquet")
     feature_columns = json.loads(Path("data/ml/feature_columns.json").read_text())
-    n = frame.height
-    holdout_fraction = float(cfg.get("holdout_fraction", 0.20))
-    dev_n = int(n * (1.0 - holdout_fraction))
-    if dev_n <= 100:
-        raise ValueError("Development set is too small for walk-forward validation")
-
+    dev_n = int(frame.height * (1.0 - float(cfg.get("holdout_fraction", 0.20))))
     dev = frame.head(dev_n)
     X_dev = dev.select(feature_columns).to_numpy()
     y_dev = _encode(dev.get_column("label").to_numpy())
@@ -48,7 +44,7 @@ def run() -> None:
     ends = dev.get_column("event_end").to_list()
 
     mlflow.set_experiment(exp_cfg["experiment_name"])
-    with mlflow.start_run(run_name="lgbm_walk_forward"):
+    with mlflow.start_run(run_name="lgbm_walk_forward") as run:
         log_lineage(
             build_lineage(
                 feature_version=exp_cfg["feature_version"],
@@ -56,29 +52,31 @@ def run() -> None:
                 dvc_revision=exp_cfg["dataset_version"],
             )
         )
-        mlflow.log_param("holdout_fraction", holdout_fraction)
+        mlflow.log_param("holdout_fraction", float(cfg.get("holdout_fraction", 0.20)))
         mlflow.log_param("feature_count", len(feature_columns))
 
         splitter = PurgedWalkForwardSplit(
             n_splits=int(val_cfg["n_splits"]),
-            embargo=__import__("pandas").Timedelta(minutes=int(val_cfg["embargo_minutes"])),
+            embargo=pd.Timedelta(minutes=int(val_cfg["embargo_minutes"])),
         )
         oof_parts = []
         fold_metrics = []
 
         for fold, (train_idx, val_idx) in enumerate(splitter.split(starts, ends), start=1):
-            params = {
-                "n_estimators": int(cfg.get("n_estimators", 1000)),
-                "learning_rate": float(cfg.get("learning_rate", 0.03)),
-                "num_leaves": int(cfg.get("num_leaves", 31)),
-                "max_depth": int(cfg.get("max_depth", -1)),
-                "subsample": float(cfg.get("subsample", 0.8)),
-                "colsample_bytree": float(cfg.get("colsample_bytree", 0.8)),
-                "reg_alpha": float(cfg.get("reg_alpha", 0.1)),
-                "reg_lambda": float(cfg.get("reg_lambda", 0.5)),
-                "class_weight": cfg.get("class_weight", "balanced"),
-            }
-            model = make_lightgbm_classifier(seed=seed + fold, params=params)
+            model = make_lightgbm_classifier(
+                seed=seed + fold,
+                params={
+                    "n_estimators": int(cfg.get("n_estimators", 1000)),
+                    "learning_rate": float(cfg.get("learning_rate", 0.03)),
+                    "num_leaves": int(cfg.get("num_leaves", 31)),
+                    "max_depth": int(cfg.get("max_depth", -1)),
+                    "subsample": float(cfg.get("subsample", 0.8)),
+                    "colsample_bytree": float(cfg.get("colsample_bytree", 0.8)),
+                    "reg_alpha": float(cfg.get("reg_alpha", 0.1)),
+                    "reg_lambda": float(cfg.get("reg_lambda", 0.5)),
+                    "class_weight": cfg.get("class_weight", "balanced"),
+                },
+            )
             model.fit(
                 X_dev[train_idx],
                 y_dev[train_idx],
@@ -86,9 +84,9 @@ def run() -> None:
                 callbacks=[lgb.early_stopping(50, verbose=False)],
             )
             proba = model.predict_proba(X_dev[val_idx])
-            loss = log_loss(y_dev[val_idx], proba, labels=[0, 1, 2])
-            fold_metrics.append(loss)
-
+            fold_metrics.append(
+                float(log_loss(y_dev[val_idx], proba, labels=[0, 1, 2]))
+            )
             oof_parts.append(
                 pl.DataFrame(
                     {
@@ -102,13 +100,12 @@ def run() -> None:
                 )
             )
 
-        if not oof_parts:
-            raise ValueError("No OOF folds were produced")
-
         oof = pl.concat(oof_parts).sort("timestamp")
-        os.makedirs("data/ml", exist_ok=True)
+        Path("data/ml").mkdir(parents=True, exist_ok=True)
         oof.write_parquet("data/ml/oof_predictions.parquet", compression="zstd")
-        log_metrics({f"fold_{i+1}_logloss": value for i, value in enumerate(fold_metrics)})
+        log_metrics(
+            {f"fold_{i + 1}_logloss": value for i, value in enumerate(fold_metrics)}
+        )
         log_metrics({"mean_oof_logloss": float(np.mean(fold_metrics))})
 
         final_model = make_lightgbm_classifier(
@@ -137,8 +134,10 @@ def run() -> None:
             },
             "artifacts/models/lgbm_dev.joblib",
         )
+        mlflow.lightgbm.log_model(final_model, artifact_path="model")
         mlflow.log_artifact("data/ml/oof_predictions.parquet")
         mlflow.log_artifact("artifacts/models/lgbm_dev.joblib")
+        mlflow.log_param("run_id", run.info.run_id)
 
 
 if __name__ == "__main__":
