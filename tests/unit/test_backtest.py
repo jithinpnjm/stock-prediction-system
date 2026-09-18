@@ -7,16 +7,21 @@ from src.backtest.engine import BacktestConfig, EventDrivenBacktester
 from src.backtest.execution import ExecutionConfig
 
 
-def test_backtest_respects_latency_and_closes_position():
+def test_backtest_respects_signal_to_next_1m_source_execution():
     tz = ZoneInfo("Asia/Kolkata")
     signal_time = datetime(2026, 1, 5, 9, 30, tzinfo=tz)
-    bar_times = [
+    availability = [
         signal_time + timedelta(minutes=1),
         signal_time + timedelta(minutes=2),
     ]
+    source = [
+        signal_time,
+        signal_time + timedelta(minutes=1),
+    ]
     bars = pl.DataFrame(
         {
-            "timestamp": bar_times,
+            "timestamp": availability,
+            "source_timestamp": source,
             "open": [100.0, 101.0],
             "high": [101.0, 102.0],
             "low": [99.0, 100.0],
@@ -43,8 +48,12 @@ def test_backtest_respects_latency_and_closes_position():
             latency_bars=1,
         ),
     )
+
     equity, trades = EventDrivenBacktester(config).run(signals, bars)
+
     assert len(trades) == 1
-    assert trades[0].entry_time == bar_times[0]
-    assert trades[0].exit_time == bar_times[1]
+    assert trades[0].entry_time == source[1]
+    assert trades[0].signal_time == signal_time
+    assert trades[0].exit_time == availability[1]
+    assert trades[0].exit_reason == "target"
     assert equity["equity"][-1] == 1002.0
