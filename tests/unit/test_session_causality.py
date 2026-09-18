@@ -40,7 +40,7 @@ def test_clusters_reset_at_session_boundary():
 
 
 def test_volatility_resets_at_session_boundary():
-    out = add_volatility_features(_two_sessions(), periods=(2,))
+    out = add_volatility_features(_two_sessions(), periods=(2, 14))
     assert out["f_atr_2"][2] is None
     assert out["f_abs_return_2"][2] is None
 
