@@ -71,7 +71,8 @@ class NSECalendar:
 
     def _local_timestamp(self, df: pl.DataFrame, timestamp_col: str) -> pl.Expr:
         dtype = df[timestamp_col].dtype
-        if isinstance(dtype, pl.Datetime) and dtype.time_zone:
+        timezone = getattr(dtype, "time_zone", None)
+        if timezone:
             return pl.col(timestamp_col).dt.convert_time_zone(self.timezone)
         return (
             pl.col(timestamp_col)
