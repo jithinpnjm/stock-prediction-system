@@ -16,23 +16,25 @@ def aggregate_1m_to_5m(
 
     df = calendar.filter_session(df_1m).sort("timestamp")
     local = pl.col("timestamp").dt.convert_time_zone(calendar.timezone)
-    session_minute = (
-        local.dt.hour() * 60
-        + local.dt.minute()
-        - (calendar.session_open.hour * 60 + calendar.session_open.minute)
-    )
+
     # Canonical 1m availability timestamps are 09:16..15:30.
-    # Completed 5m bars end at 09:20, 09:25, ..., 15:30.
+    # Five-minute buckets are aligned to the NSE 09:15 session boundary and
+    # represented by their closing availability timestamp.
+    bucket_close = local.dt.truncate("5m") + pl.duration(minutes=5)
+
     df = df.with_columns(
-        (((session_minute + 4) / 5).floor().cast(pl.Int32)).alias("_bucket"),
+        bucket_close.alias("_bucket_close"),
         pl.col("timestamp").dt.date().alias("_session_date"),
     )
 
     out = (
-        df.group_by(["_session_date", "_bucket"], maintain_order=True)
+        df.group_by(
+            ["_session_date", "_bucket_close"],
+            maintain_order=True,
+        )
         .agg(
             pl.col("timestamp").min().alias("_first_ts"),
-            pl.col("timestamp").max().alias("timestamp"),
+            pl.col("_bucket_close").first().alias("timestamp"),
             pl.col("open").first().alias("open"),
             pl.col("high").max().alias("high"),
             pl.col("low").min().alias("low"),
@@ -40,13 +42,22 @@ def aggregate_1m_to_5m(
             pl.col("volume").sum().alias("volume"),
             pl.len().alias("source_1m_count"),
         )
-        .sort(["_session_date", "_bucket"])
+        .sort(["_session_date", "_bucket_close"])
     )
+
     if drop_incomplete:
         out = out.filter(pl.col("source_1m_count") == 5)
 
     return out.select(
-        ["timestamp", "open", "high", "low", "close", "volume", "source_1m_count"]
+        [
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "source_1m_count",
+        ]
     )
 
 
@@ -92,6 +103,7 @@ def validate_aggregation(
             raise ValueError(f"{d}: first timestamp must be 09:20")
         if day["timestamp"][-1].strftime("%H:%M") != "15:30":
             raise ValueError(f"{d}: last timestamp must be 15:30")
+
         deltas = (
             day.with_columns(
                 pl.col("timestamp").diff().dt.total_seconds().alias("_d")
