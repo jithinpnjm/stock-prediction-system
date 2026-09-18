@@ -1,40 +1,49 @@
+from __future__ import annotations
+
 import polars as pl
 
 
-def add_volatility_features(df: pl.DataFrame, period: int = 14) -> pl.DataFrame:
-    """
-    Adds Average True Range (ATR) and Normalized Volatility features.
-    """
-    # Calculate True Range (TR)
-    # TR = max(High - Low, abs(High - PrevClose), abs(Low - PrevClose))
+def add_volatility_features(
+    df: pl.DataFrame,
+    *,
+    atr_periods: tuple[int, ...] = (5, 14, 30),
+    return_periods: tuple[int, ...] = (1, 3, 6, 12, 24),
+) -> pl.DataFrame:
+    out = df.with_columns(
+        [
+            (pl.col("high") - pl.col("low")).alias("_tr0"),
+            (pl.col("high") - pl.col("close").shift(1)).abs().alias("_tr1"),
+            (pl.col("low") - pl.col("close").shift(1)).abs().alias("_tr2"),
+        ]
+    ).with_columns(pl.max_horizontal("_tr0", "_tr1", "_tr2").alias("true_range"))
 
-    df = (
-        df.with_columns(pl.col("close").shift(1).alias("prev_close"))
-        .with_columns(
+    exprs: list[pl.Expr] = []
+    for p in atr_periods:
+        atr = pl.col("true_range").rolling_mean(p).alias(f"atr_{p}")
+        exprs.extend(
             [
-                (pl.col("high") - pl.col("low")).alias("tr_1"),
-                (pl.col("high") - pl.col("prev_close")).abs().alias("tr_2"),
-                (pl.col("low") - pl.col("prev_close")).abs().alias("tr_3"),
+                atr,
+                (pl.col("true_range") / (pl.col("true_range").rolling_mean(p) + 1e-9)).alias(
+                    f"range_to_atr_{p}"
+                ),
+                (
+                    pl.col("true_range").rolling_mean(p)
+                    / (pl.col("close").abs() + 1e-9)
+                    * 10_000
+                ).alias(f"atr_bps_{p}"),
             ]
         )
-        .with_columns(pl.max_horizontal("tr_1", "tr_2", "tr_3").alias("true_range"))
-    )
-
-    # Simple moving average of TR for ATR
-    df = df.with_columns(
-        pl.col("true_range").rolling_mean(window_size=period).alias(f"f_atr_{period}")
-    ).with_columns(
-        [
-            # Normalized ATR
-            (pl.col(f"f_atr_{period}") / pl.col("close") * 10000).alias(
-                f"f_natr_{period}_bps"
-            ),
-            # Current Range relative to ATR
-            (
-                pl.col("tr_1") / pl.col(f"f_atr_{period}").fill_null(1.0).fill_nan(1.0)
-            ).alias("f_range_to_atr"),
-        ]
-    )
-
-    # Cleanup intermediate columns
-    return df.drop(["prev_close", "tr_1", "tr_2", "tr_3", "true_range"])
+    for p in return_periods:
+        exprs.extend(
+            [
+                (pl.col("close") / pl.col("close").shift(p) - 1.0).alias(f"return_{p}"),
+                (
+                    pl.col("close").log().diff().rolling_std(p) * (p**0.5)
+                ).alias(f"realized_vol_{p}"),
+                (
+                    pl.col("high").rolling_max(p) - pl.col("low").rolling_min(p)
+                ).alias(f"rolling_range_{p}"),
+            ]
+        )
+    out = out.with_columns(exprs)
+    return out.drop(["_tr0", "_tr1", "_tr2", "true_range"])

@@ -1,39 +1,34 @@
+from __future__ import annotations
+
+import glob
 import os
-import sys
+from pathlib import Path
 
 import polars as pl
 
+from src.common.config import load_yaml
+from src.data.ingest import load_source, write_bronze
 
-def run():
-    print("Running pipeline step: 01_ingest.py")
 
-    # User will override this path dynamically based on Nebius storage mounts
-    RAW_DATA_PATH = os.environ.get("RAW_1M_DATA_PATH", "data/raw/1m_data.parquet")
+def discover_sources(config: dict) -> list[str]:
+    sources = sorted(glob.glob(config["source"]["raw_glob"]))
+    if sources:
+        return sources
+    for fallback in config["ingestion"].get("allow_legacy_files", []):
+        if Path(fallback).exists():
+            return [fallback]
+    raise FileNotFoundError("No configured raw data source was found")
 
-    if not os.path.exists(RAW_DATA_PATH):
-        print(f"ERROR: Raw data not found at {RAW_DATA_PATH}.")
-        print("Please mount your data or set RAW_1M_DATA_PATH environment variable.")
-        print(
-            "To generate synthetic mock data for testing, run: python tests/data_quality/mock_data.py"
-        )
-        sys.exit(1)
 
-    try:
-        # We enforce reading as Parquet as described in the architecture plan
-        df = pl.read_parquet(RAW_DATA_PATH)
-
-        # Validate schema basics
-        required_cols = {"datetime", "open", "high", "low", "close", "volume"}
-        if not required_cols.issubset(set(df.columns)):
-            raise ValueError(
-                f"Data is missing required columns. Needs: {required_cols}"
-            )
-
-        print(f"Successfully ingested {df.height} rows from {RAW_DATA_PATH}")
-
-    except Exception as e:
-        print(f"Data ingestion failed: {e!s}")
-        sys.exit(1)
+def run() -> None:
+    config = load_yaml(os.getenv("DATA_CONFIG", "configs/data/banknifty.yaml"))
+    sources = discover_sources(config)
+    frames = [load_source(p, input_timezone=config["source"]["timezone"]) for p in sources]
+    df = pl.concat(frames, how="diagonal_relaxed").sort("timestamp")
+    if df.get_column("timestamp").n_unique() != df.height:
+        raise ValueError("Duplicate timestamps found during ingestion; source data was not silently deduplicated")
+    write_bronze(df, config["ingestion"]["bronze_path"])
+    print(f"Ingested {len(sources)} source file(s), {df.height} canonical 1m rows")
 
 
 if __name__ == "__main__":

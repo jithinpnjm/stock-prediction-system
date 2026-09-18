@@ -1,0 +1,4 @@
+target_points: 200.0
+stop_points: 70.0
+horizon_bars: 75
+entry_delay_minutes: 1

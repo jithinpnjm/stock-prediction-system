@@ -1,34 +1,89 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
+from datetime import datetime
 
 
-@dataclass
+@dataclass(frozen=True)
 class Trade:
-    entry_time: str
+    entry_time: datetime
+    exit_time: datetime
     entry_price: float
-    direction: int  # 1 for long, -1 for short
-    size: float
-    exit_time: str = None
-    exit_price: float = None
-    pnl: float = 0.0
+    exit_price: float
+    direction: int
+    units: float
+    gross_pnl: float
+    commissions: float
+    transaction_costs: float
+    pnl: float
+
+    @property
+    def duration_minutes(self) -> float:
+        return (self.exit_time - self.entry_time).total_seconds() / 60.0
 
 
 class Portfolio:
-    def __init__(self, initial_capital: float = 100000.0):
-        self.initial_capital = initial_capital
-        self.cash = initial_capital
-        self.position = 0  # +1 (Long), -1 (Short), 0 (Flat)
-        self.position_size = 0.0
+    def __init__(self, initial_capital: float, *, point_value: float = 1.0):
+        self.initial_capital = float(initial_capital)
+        self.realized_cash = float(initial_capital)
+        self.point_value = float(point_value)
+        self.direction = 0
+        self.units = 0.0
         self.entry_price = 0.0
-        self.entry_time = None
+        self.entry_time: datetime | None = None
+        self.entry_costs = 0.0
         self.trade_history: list[Trade] = []
 
-    def update_portfolio(self, current_price: float) -> float:
-        """Returns the mark-to-market value of the portfolio."""
-        if self.position == 0:
-            return self.cash
+    def open(self, time: datetime, price: float, direction: int, units: float, costs: float) -> None:
+        if self.direction != 0:
+            raise RuntimeError("Cannot open while a position is active")
+        if direction not in (-1, 1) or units <= 0:
+            raise ValueError("direction must be -1/+1 and units must be > 0")
+        self.direction = direction
+        self.units = float(units)
+        self.entry_price = float(price)
+        self.entry_time = time
+        self.entry_costs = float(costs)
+        self.realized_cash -= costs
 
-        # Calculate unrealized PnL
-        unrealized_pnl = (
-            (current_price - self.entry_price) * self.position * self.position_size
+    def close(self, time: datetime, price: float, costs: float) -> Trade:
+        if self.direction == 0 or self.entry_time is None:
+            raise RuntimeError("No open position")
+        gross = (
+            (float(price) - self.entry_price)
+            * self.direction
+            * self.units
+            * self.point_value
         )
-        return self.cash + unrealized_pnl
+        pnl = gross - self.entry_costs - costs
+        self.realized_cash += gross - costs
+        trade = Trade(
+            entry_time=self.entry_time,
+            exit_time=time,
+            entry_price=self.entry_price,
+            exit_price=float(price),
+            direction=self.direction,
+            units=self.units,
+            gross_pnl=gross,
+            commissions=self.entry_costs + costs,
+            transaction_costs=0.0,
+            pnl=pnl,
+        )
+        self.trade_history.append(trade)
+        self.direction = 0
+        self.units = 0.0
+        self.entry_price = 0.0
+        self.entry_time = None
+        self.entry_costs = 0.0
+        return trade
+
+    def mark_to_market(self, price: float) -> float:
+        unrealized = 0.0
+        if self.direction:
+            unrealized = (
+                (float(price) - self.entry_price)
+                * self.direction
+                * self.units
+                * self.point_value
+            )
+        return self.realized_cash + unrealized
