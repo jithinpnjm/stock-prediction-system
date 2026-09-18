@@ -42,15 +42,15 @@ def _session_cusum(
 ) -> tuple[np.ndarray, np.ndarray]:
     if volatility_lookback < 2:
         raise ValueError("volatility_lookback must be >= 2")
+
     scale = (
         pl.Series("r", returns)
-        .rolling_std(volatility_lookback)
+        .rolling_std(volatility_lookback, min_samples=2)
         .shift(1)
+        .fill_null(1e-4)
         .to_numpy()
     )
-    finite = scale[np.isfinite(scale)]
-    fallback = float(np.median(finite)) if len(finite) else 1e-4
-    scale = np.where(np.isfinite(scale), scale, fallback)
+    scale = np.where(np.isfinite(scale), scale, 1e-4)
     threshold = scale * threshold_multiple
     return cusum_events(returns, threshold), threshold
 
@@ -83,7 +83,11 @@ def add_event_sampling_features(
         events_parts.append(events)
         threshold_parts.append(thresholds)
 
-    events = np.concatenate(events_parts) if events_parts else np.empty(0, dtype=np.int8)
+    events = (
+        np.concatenate(events_parts)
+        if events_parts
+        else np.empty(0, dtype=np.int8)
+    )
     thresholds = (
         np.concatenate(threshold_parts)
         if threshold_parts
