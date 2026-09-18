@@ -29,7 +29,7 @@ def aggregate_1m_to_5m(
     bucket_close = (
         local_naive.dt.date().cast(pl.Datetime(time_zone=None))
         + pl.duration(minutes=bucket_close_minute)
-    )
+    ).dt.replace_time_zone(calendar.timezone)
 
 
     df = df.with_columns(
