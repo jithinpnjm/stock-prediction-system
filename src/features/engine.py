@@ -77,11 +77,18 @@ def build_point_in_time_features(
         out = add_session_vwap(out)
 
     if bool(cfg.get("enable_fractional_diff", False)):
-        out = add_fractional_diff_feature(
-            out,
-            d=float(cfg.get("fractional_diff_d", 0.4)),
-            threshold=float(cfg.get("fractional_diff_threshold", 1e-5)),
-            max_lags=int(cfg.get("fractional_diff_max_lags", 200)),
-        )
+        # Fractional differencing is inherently sequential; compute it
+        # independently per NSE session so state cannot cross the boundary.
+        parts = []
+        for part in out.partition_by(out["timestamp"].dt.date(), maintain_order=True):
+            parts.append(
+                add_fractional_diff_feature(
+                    part,
+                    d=float(cfg.get("fractional_diff_d", 0.4)),
+                    threshold=float(cfg.get("fractional_diff_threshold", 1e-5)),
+                    max_lags=int(cfg.get("fractional_diff_max_lags", 200)),
+                )
+            )
+        out = pl.concat(parts, how="vertical") if parts else out
 
     return out
