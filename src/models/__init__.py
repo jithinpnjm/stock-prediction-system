@@ -1,1 +1,1 @@
-"""Baseline and sequence-model interfaces for Bank Nifty research."""
+"""Baseline, sequence, regime, meta-label and magnitude model interfaces."""
