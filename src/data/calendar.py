@@ -79,6 +79,10 @@ class NSECalendar:
             .dt.replace_time_zone(self.timezone)
         )
 
+    def _session_minutes(self, df: pl.DataFrame, timestamp_col: str) -> pl.Expr:
+        local = self._local_timestamp(df, timestamp_col)
+        return local.dt.hour() * 60 + local.dt.minute()
+
     def filter_session(
         self,
         df: pl.DataFrame,
@@ -87,15 +91,10 @@ class NSECalendar:
         """Filter canonical availability timestamps: (open, close]."""
         if df.is_empty():
             return df
-        local = self._local_timestamp(df, timestamp_col)
-        midnight = local.dt.truncate("1d")
-        open_dt = midnight + pl.duration(
-            minutes=self.session_open.hour * 60 + self.session_open.minute
-        )
-        close_dt = midnight + pl.duration(
-            minutes=self.session_close.hour * 60 + self.session_close.minute
-        )
-        return df.filter((local > open_dt) & (local <= close_dt))
+        minutes = self._session_minutes(df, timestamp_col)
+        open_minute = self.session_open.hour * 60 + self.session_open.minute
+        close_minute = self.session_close.hour * 60 + self.session_close.minute
+        return df.filter((minutes > open_minute) & (minutes <= close_minute))
 
     def filter_source_session(
         self,
@@ -105,12 +104,7 @@ class NSECalendar:
         """Filter source candle-start timestamps: [open, close)."""
         if df.is_empty():
             return df
-        local = self._local_timestamp(df, timestamp_col)
-        midnight = local.dt.truncate("1d")
-        open_dt = midnight + pl.duration(
-            minutes=self.session_open.hour * 60 + self.session_open.minute
-        )
-        close_dt = midnight + pl.duration(
-            minutes=self.session_close.hour * 60 + self.session_close.minute
-        )
-        return df.filter((local >= open_dt) & (local < close_dt))
+        minutes = self._session_minutes(df, timestamp_col)
+        open_minute = self.session_open.hour * 60 + self.session_open.minute
+        close_minute = self.session_close.hour * 60 + self.session_close.minute
+        return df.filter((minutes >= open_minute) & (minutes < close_minute))
