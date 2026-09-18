@@ -1,32 +1,49 @@
-import joblib
-import polars as pl
-from sklearn.metrics import accuracy_score, classification_report
+from __future__ import annotations
 
-from src.models.lightgbm import predict_lightgbm
+import json
+from pathlib import Path
+
+import numpy as np
+import polars as pl
+from sklearn.metrics import accuracy_score,log_loss
+
+from src.validation.calibration import brier_score,expected_calibration_error
+from src.validation.statistical_tests import bootstrap_mean_ci
 
 
 def run():
-    print("Running pipeline step: 08_validate.py")
+    df=pl.read_parquet("data/predictions/lgbm_oof.parquet").sort("timestamp")
+    y=df["label"].to_numpy()
+    p=df.select(["p_short","p_none","p_long"]).to_numpy()
+    pred=np.asarray([-1,0,1],dtype=np.int8)[np.argmax(p,axis=1)]
+    report={
+        "observations":int(len(y)),
+        "accuracy":float(accuracy_score(y,pred)),
+        "log_loss":float(log_loss(y,p,labels=[-1,0,1])),
+        "ece_long":expected_calibration_error((y==1).astype(int),p[:,2]),
+        "ece_short":expected_calibration_error((y==-1).astype(int),p[:,0]),
+        "brier_long":brier_score((y==1).astype(int),p[:,2]),
+        "brier_short":brier_score((y==-1).astype(int),p[:,0]),
+    }
+    pnl_proxy=np.where(pred==1,(y==1).astype(float),np.where(pred==-1,(y==-1).astype(float),0.0))
+    report["proxy_mean_accuracy"]=float(pnl_proxy.mean())
+    mean,lo,hi=bootstrap_mean_ci(pnl_proxy,n_boot=2000,seed=42)
+    report["proxy_mean_ci95"]=[mean,lo,hi]
+    fold_report=[]
+    for fold,group in df.group_by("fold",maintain_order=True):
+        yy=group["label"].to_numpy()
+        pp=group.select(["p_short","p_none","p_long"]).to_numpy()
+        fold_report.append({
+            "fold":int(fold[0]),
+            "rows":group.height,
+            "accuracy":float(accuracy_score(yy,np.asarray([-1,0,1])[np.argmax(pp,axis=1)])),
+            "log_loss":float(log_loss(yy,pp,labels=[-1,0,1])),
+        })
+    report["folds"]=fold_report
+    Path("reports").mkdir(exist_ok=True)
+    Path("reports/validation_report.json").write_text(json.dumps(report,indent=2)+"\n")
+    print(json.dumps(report,indent=2))
 
-    try:
-        X = pl.read_parquet("data/ml/X.parquet").to_numpy()
-        y_true = pl.read_parquet("data/ml/y.parquet").to_series().to_numpy()
-        models = joblib.load("models/lightgbm_cv_models.pkl")
-    except FileNotFoundError:
-        print("Run 07_train.py first.")
-        return
 
-    # Ensemble prediction (majority vote or average probability)
-    # For simplicity, we just take the first model to demonstrate the validation loop.
-    model = models[0]
-
-    y_pred = predict_lightgbm(model, X)
-
-    print("\nValidation Results (Using Fold 1 Model on Full Data for Demo):")
-    print("-" * 50)
-    print(f"Accuracy: {accuracy_score(y_true, y_pred):.4f}")
-    print(classification_report(y_true, y_pred, zero_division=0))
-
-
-if __name__ == "__main__":
+if __name__=="__main__":
     run()

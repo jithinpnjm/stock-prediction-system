@@ -1,60 +1,82 @@
-import os
+from __future__ import annotations
 
-import joblib
+import json
+import os
+from pathlib import Path
+
 import mlflow
 import mlflow.lightgbm
+import numpy as np
 import polars as pl
+import yaml
+from sklearn.metrics import log_loss
 
-from src.models.lightgbm import train_lightgbm_classifier
+from src.mlops.lineage import Lineage
+from src.mlops.mlflow_utils import log_lineage, log_resolved_config
+from src.models.lightgbm import predict_proba, train_lightgbm_classifier
 from src.validation.purged_cv import PurgedTimeSeriesSplit
 
 
 def run():
-    print("Running pipeline step: 07_train.py")
+    dataset=pl.read_parquet("data/ml/training_dataset.parquet").sort("timestamp")
+    feature_columns=json.loads(Path("data/ml/feature_schema.json").read_text())["feature_columns"]
+    X=dataset.select(feature_columns).to_numpy()
+    y=dataset["label"].to_numpy()
+    timestamps=dataset["timestamp"].dt.epoch("ns").to_numpy()
+    event_end=dataset["event_end_timestamp"].dt.epoch("ns").to_numpy()
 
-    try:
-        X = pl.read_parquet("data/ml/X.parquet").to_numpy()
-        y = pl.read_parquet("data/ml/y.parquet").to_series().to_numpy()
-    except FileNotFoundError:
-        print("Run 06_build_dataset.py first.")
-        return
+    vcfg=yaml.safe_load(Path("configs/validation/default.yaml").read_text())
+    mcfg=yaml.safe_load(Path("configs/models/lightgbm.yaml").read_text())
+    embargo_ns=int(vcfg["embargo_bars"])*5*60*1_000_000_000
+    splitter=PurgedTimeSeriesSplit(int(vcfg["n_splits"]),embargo=embargo_ns)
 
-    # Assuming we will have thousands of 5m bars, embargo is ~75.
-    cv = PurgedTimeSeriesSplit(n_splits=3, embargo_size=75)
-
-    models = []
-
+    rows=[]
     mlflow.set_experiment("BankNifty_Baseline_LGBM")
+    with mlflow.start_run(run_name=os.getenv("MLFLOW_RUN_NAME","lgbm_walkforward")):
+        lineage=Lineage.create(
+            dataset_id="banknifty_5m_v1",
+            feature_version="price_action_v1",
+            label_version="triple_barrier_200_70_v1",
+            validation_version="purged_time_series_v1",
+        )
+        log_lineage(lineage.to_dict())
+        log_resolved_config({"model":mcfg,"validation":vcfg})
+        mlflow.log_param("n_rows",len(y))
+        mlflow.log_param("n_features",len(feature_columns))
+        mlflow.log_param("n_splits",splitter.get_n_splits())
 
-    with mlflow.start_run(run_name="Purged_CV_GPU_Train"):
-        for fold, (train_idx, val_idx) in enumerate(cv.split(X)):
-            print(f"Training Fold {fold+1} on GPU...")
-            X_train, y_train = X[train_idx], y[train_idx]
-            X_val, y_val = X[val_idx], y[val_idx]
+        params=dict(mcfg)
+        rounds=int(params.pop("num_boost_round",1000))
+        params.pop("early_stopping_rounds",None)
 
-            # Since mock data won't have enough rows for an embargo of 75, we fallback if indices are empty
-            if len(train_idx) == 0 or len(val_idx) == 0:
-                print(
-                    f"Skipping fold {fold+1} due to small data size for embargo testing."
-                )
+        for fold,(train_idx,val_idx) in enumerate(splitter.split(timestamps,event_end),1):
+            if len(train_idx)<int(vcfg["min_train_rows"]):
                 continue
-
-            model = train_lightgbm_classifier(X_train, y_train, X_val, y_val)
-            models.append(model)
-
-            # Log Model specifically for this fold
-            mlflow.lightgbm.log_model(model, artifact_path=f"model_fold_{fold+1}")
-
-        # Optional: Save locally as well
-        if models:
-            os.makedirs("models", exist_ok=True)
-            joblib.dump(models, "models/lightgbm_cv_models.pkl")
-            print("Training complete. Models logged to MLflow and saved locally.")
-        else:
-            print(
-                "No models trained. Data might be too small for the Purged CV split sizes."
+            model=train_lightgbm_classifier(
+                X[train_idx],y[train_idx],X[val_idx],y[val_idx],
+                params=params,num_boost_round=rounds
             )
+            p=predict_proba(model,X[val_idx])
+            loss=log_loss(y[val_idx],p,labels=[-1,0,1])
+            mlflow.log_metric(f"fold_{fold}_log_loss",loss)
+            for idx,row in zip(val_idx,p):
+                rows.append({
+                    "timestamp":dataset["timestamp"][idx],
+                    "label":int(y[idx]),
+                    "p_short":float(row[0]),
+                    "p_none":float(row[1]),
+                    "p_long":float(row[2]),
+                    "fold":fold,
+                })
+            mlflow.lightgbm.log_model(model,artifact_path=f"model_fold_{fold}")
+
+    if not rows:
+        raise RuntimeError("No valid OOF folds were produced")
+    out=pl.DataFrame(rows).sort("timestamp")
+    Path("data/predictions").mkdir(parents=True,exist_ok=True)
+    out.write_parquet("data/predictions/lgbm_oof.parquet")
+    print(f"wrote {out.height} OOF predictions")
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     run()

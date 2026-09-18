@@ -1,46 +1,33 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
 import polars as pl
 
 from src.backtest.metrics import calculate_metrics
 
 
 def run():
-    print("Running pipeline step: 10_report.py")
-
-    try:
-        equity_curve = pl.read_parquet("data/backtest/equity_curve.parquet")
-        trades_df = pl.read_parquet("data/backtest/trades.parquet")
-    except FileNotFoundError:
-        print("Run 09_backtest.py first.")
-        return
-
-    # To calculate metrics properly, we map the polars dataframe back to our Trade objects
+    validation=json.loads(Path("reports/validation_report.json").read_text())
+    equity=pl.read_parquet("data/backtest/equity_curve.parquet")
+    trades_df=pl.read_parquet("data/backtest/trades.parquet")
     from src.backtest.portfolio import Trade
-
-    trades = [
+    trades=[
         Trade(
-            entry_time=row["entry_time"],
-            entry_price=0,
-            direction=row["direction"],
-            size=0,
-            exit_time=row["exit_time"],
-            exit_price=0,
-            pnl=row["pnl"],
+            entry_time=r["entry_time"],exit_time=r["exit_time"],direction=int(r["direction"]),
+            quantity=float(r["quantity"]),entry_price=float(r["entry_price"]),
+            exit_price=float(r["exit_price"]),pnl=float(r["pnl"]),
+            exit_reason=r["exit_reason"],signal_time=r["signal_time"]
         )
-        for row in trades_df.to_dicts()
+        for r in trades_df.to_dicts()
     ]
-
-    metrics = calculate_metrics(equity_curve, trades)
-
-    print("\n" + "=" * 40)
-    print("   BACKTEST PERFORMANCE REPORT")
-    print("=" * 40)
-    for k, v in metrics.items():
-        if isinstance(v, float):
-            print(f"{k:<20}: {v:.2f}")
-        else:
-            print(f"{k:<20}: {v}")
-    print("=" * 40)
+    backtest=calculate_metrics(equity,trades)
+    report={"validation":validation,"backtest":backtest}
+    Path("reports").mkdir(exist_ok=True)
+    Path("reports/research_report.json").write_text(json.dumps(report,indent=2,default=str)+"\n")
+    print(json.dumps(report,indent=2,default=str))
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     run()

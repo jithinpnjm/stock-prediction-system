@@ -1,57 +1,58 @@
-import os
+from __future__ import annotations
 
-import joblib
+import json
+from dataclasses import asdict
+from pathlib import Path
+
 import polars as pl
+import yaml
 
-from src.backtest.engine import EventDrivenBacktester
-from src.models.lightgbm import predict_lightgbm
+from src.backtest.engine import BacktestConfig,EventDrivenBacktester
+from src.backtest.execution import ExecutionConfig
+from src.models.ensemble import decision_with_abstention
 
 
 def run():
-    print("Running pipeline step: 09_backtest.py")
-
-    try:
-        # Load canonical pricing data to get datetimes and close prices
-        df_prices = pl.read_parquet("data/silver/5m_canonical.parquet")
-
-        # Load features for inference
-        X = pl.read_parquet("data/ml/X.parquet").to_numpy()
-
-        # Load trained model
-        models = joblib.load("models/lightgbm_cv_models.pkl")
-        model = models[0]  # Using fold 1 for prototype demo
-    except FileNotFoundError:
-        print("Run prior pipelines up to 08_validate.py first.")
-        return
-
-    # Generate Predictions
-    predictions = predict_lightgbm(model, X)
-
-    # Merge predictions into the price dataframe
-    df_backtest = df_prices.with_columns(pl.Series("signal", predictions))
-
-    # Run Backtest
-    backtester = EventDrivenBacktester(df_backtest, initial_capital=100000.0)
-    equity_curve, trades = backtester.run()
-
-    # Save artifacts
-    os.makedirs("data/backtest", exist_ok=True)
-    equity_curve.write_parquet("data/backtest/equity_curve.parquet")
-
-    # Save trades
-    trades_dict = [
-        {
-            "entry_time": t.entry_time,
-            "exit_time": t.exit_time,
-            "direction": t.direction,
-            "pnl": t.pnl,
-        }
-        for t in trades
-    ]
-    pl.DataFrame(trades_dict).write_parquet("data/backtest/trades.parquet")
-
-    print(f"Backtest completed. Extracted {len(trades)} trades.")
+    cfg=yaml.safe_load(Path("configs/backtest/default.yaml").read_text())
+    pred=pl.read_parquet("data/predictions/lgbm_oof.parquet").sort("timestamp")
+    probs=pred.select(["p_short","p_none","p_long"]).to_numpy()
+    signals,confidence=decision_with_abstention(
+        probs,min_probability=float(cfg["min_probability"]),min_edge=float(cfg["min_edge"])
+    )
+    signals_df=pred.select("timestamp").with_columns(
+        pl.Series("signal",signals),pl.Series("confidence",confidence)
+    )
+    bars=pl.read_parquet("data/bronze/validated_1m.parquet")
+    bt_cfg=BacktestConfig(
+        initial_capital=float(cfg["initial_capital"]),
+        target_points=float(cfg["target_points"]),
+        stop_points=float(cfg["stop_points"]),
+        entry_start=cfg["entry_start"],entry_end=cfg["entry_end"],
+        flatten_time=cfg["flatten_time"],
+        execution=ExecutionConfig(
+            slippage_points=float(cfg["slippage_points"]),
+            commission_per_order=float(cfg["commission_per_order"]),
+            quantity=float(cfg["quantity"]),
+            latency_bars=int(cfg["latency_bars"]),
+        ),
+    )
+    equity,trades=EventDrivenBacktester(bt_cfg).run(signals_df,bars)
+    Path("data/backtest").mkdir(parents=True,exist_ok=True)
+    equity.write_parquet("data/backtest/equity_curve.parquet")
+    trade_rows=[asdict(t) for t in trades]
+    pl.DataFrame(trade_rows).write_parquet("data/backtest/trades.parquet") if trade_rows else pl.DataFrame({
+        "entry_time":pl.Series([],dtype=pl.Datetime("ns",time_zone="Asia/Kolkata")),
+        "exit_time":pl.Series([],dtype=pl.Datetime("ns",time_zone="Asia/Kolkata")),
+        "direction":pl.Series([],dtype=pl.Int8),
+        "quantity":pl.Series([],dtype=pl.Float64),
+        "entry_price":pl.Series([],dtype=pl.Float64),
+        "exit_price":pl.Series([],dtype=pl.Float64),
+        "pnl":pl.Series([],dtype=pl.Float64),
+        "exit_reason":pl.Series([],dtype=pl.String),
+        "signal_time":pl.Series([],dtype=pl.Datetime("ns",time_zone="Asia/Kolkata")),
+    }).write_parquet("data/backtest/trades.parquet")
+    print(f"backtest trades={len(trades)}")
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     run()
