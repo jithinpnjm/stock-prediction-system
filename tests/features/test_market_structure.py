@@ -42,5 +42,6 @@ def test_market_structure_resets_at_session_boundary():
     second_day = out.filter(
         pl.col("timestamp").dt.date() == datetime(2026, 9, 16).date()
     )
-    assert second_day["f_last_swing_high"][0] is not None
+    assert second_day["f_last_swing_high"][0] is None
+    assert second_day["f_last_swing_low"][0] is None
     assert second_day["f_structure_trend"][0] == 0
