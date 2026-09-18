@@ -68,9 +68,16 @@ def add_candle_cluster_features(df: pl.DataFrame, max_bars: int = 10) -> pl.Data
                 (pl.col("close") - pl.col("close").shift(n).over("_session_date"))
                 / (rolling_range + eps)
             ).alias(f"f_cluster_{n}_efficiency"),
+            # Not "f_"-prefixed (i.e. not auto-selected as a model
+            # feature): the raw volume field is 0 for the whole dataset
+            # before 2025-07-01, so a volume-mean feature is degenerate
+            # (near-zero variance) for ~3.75 of the ~5 years of history
+            # and would dominate any z-scored model once real volume
+            # appears. Revisit once training is scoped to the period
+            # where volume is actually populated.
             pl.col("volume")
             .rolling_mean(n)
             .over("_session_date")
-            .alias(f"f_cluster_{n}_volume_mean"),
+            .alias(f"_cluster_{n}_volume_mean"),
         )
     return out.drop("_session_date")

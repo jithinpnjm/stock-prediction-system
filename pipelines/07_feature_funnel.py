@@ -49,7 +49,8 @@ FUNNEL_STAGES: list[tuple[str, list[str]]] = [
                     "high",
                     "low",
                     "efficiency",
-                    "volume_mean",
+                    # volume_mean deliberately excluded: raw volume is
+                    # 0 for the whole dataset before 2025-07-01.
                 )
             ],
         ],
@@ -150,7 +151,8 @@ FUNNEL_STAGES: list[tuple[str, list[str]]] = [
     (
         "microstructure_1m",
         [
-            "f_1m_path_volume",
+            # f_1m_path_volume deliberately excluded: raw volume is 0
+            # for the whole dataset before 2025-07-01.
             "f_1m_range_sum",
             "f_1m_range_mean",
             "f_1m_range_std",

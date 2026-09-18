@@ -30,7 +30,10 @@ def add_1m_inside_5m_features(
             pl.col("low").min().alias("_1m_path_low"),
             pl.col("open").first().alias("_first_1m_open"),
             pl.col("close").last().alias("_last_1m_close"),
-            pl.col("volume").sum().alias("f_1m_path_volume"),
+            # Not "f_"-prefixed: raw volume is 0 for the whole dataset
+            # before 2025-07-01 (see clusters.py for the same note), so
+            # this is degenerate for most of the 5-year history.
+            pl.col("volume").sum().alias("_1m_path_volume"),
             pl.col("_range").sum().alias("f_1m_range_sum"),
             pl.col("_range").mean().alias("f_1m_range_mean"),
             pl.col("_range").std().alias("f_1m_range_std"),

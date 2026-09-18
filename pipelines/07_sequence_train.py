@@ -50,7 +50,8 @@ SEQUENCE_FEATURE_COLUMNS = [
             "high",
             "low",
             "efficiency",
-            "volume_mean",
+            # volume_mean deliberately excluded: raw volume is 0 for
+            # the whole dataset before 2025-07-01.
         )
     ],
     "f_atr_6",
@@ -92,7 +93,8 @@ SEQUENCE_FEATURE_COLUMNS = [
     "f_or6_position",
     "f_distance_to_or6_high",
     "f_distance_to_or6_low",
-    "f_1m_path_volume",
+    # f_1m_path_volume deliberately excluded: raw volume is 0 for the
+    # whole dataset before 2025-07-01.
     "f_1m_range_sum",
     "f_1m_range_mean",
     "f_1m_range_std",
