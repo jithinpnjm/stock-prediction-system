@@ -21,43 +21,47 @@ from src.features.volatility import add_volatility_features
 
 
 def run():
-    cfg=yaml.safe_load(Path("configs/features/default.yaml").read_text())
-    df5=pl.read_parquet("data/silver/5m_canonical.parquet")
-    source=pl.read_parquet("data/bronze/validated_1m.parquet")
+    cfg = yaml.safe_load(Path("configs/features/default.yaml").read_text())
+    df5 = pl.read_parquet("data/silver/5m_canonical.parquet")
+    source = pl.read_parquet("data/bronze/validated_1m.parquet")
 
-    df=add_candle_geometry_features(df5)
-    df=add_time_features(df)
-    df=add_session_context_features(df)
-    df=add_candle_cluster_features(df,int(cfg["cluster_max_bars"]))
-    df=add_volatility_features(df,tuple(cfg["atr_periods"]))
-    df=add_multi_timeframe_features(df,tuple(cfg["multi_timeframes"]))
-    if bool(cfg.get("enable_historical_intraday",True)):
-        df=add_historical_intraday_context(
-            df,int(cfg.get("historical_intraday_lookback_days",20))
+    df = add_candle_geometry_features(df5)
+    df = add_time_features(df)
+    df = add_session_context_features(df)
+    df = add_candle_cluster_features(df, int(cfg["cluster_max_bars"]))
+    df = add_volatility_features(df, tuple(cfg["atr_periods"]))
+    df = add_multi_timeframe_features(df, tuple(cfg["multi_timeframes"]))
+    if bool(cfg.get("enable_historical_intraday", True)):
+        df = add_historical_intraday_context(
+            df, int(cfg.get("historical_intraday_lookback_days", 20))
         )
-    df=add_swing_features(df,int(cfg["swing_lookback"]))
-    df=add_support_resistance_features(df,int(cfg["support_resistance_lookback"]))
-    df=add_market_structure_features(df)
-    df=add_opening_range_features(df,tuple(cfg["opening_range_windows"]))
-    df=add_1m_inside_5m_features(source,df)
-    df=add_event_sampling_features(df,float(cfg["cusum_threshold_multiple"]))
+    df = add_swing_features(df, int(cfg["swing_lookback"]))
+    df = add_support_resistance_features(df, int(cfg["support_resistance_lookback"]))
+    df = add_market_structure_features(df)
+    df = add_opening_range_features(df, tuple(cfg["opening_range_windows"]))
+    df = add_1m_inside_5m_features(source, df)
+    df = add_event_sampling_features(df, float(cfg["cusum_threshold_multiple"]))
 
-    if bool(cfg.get("enable_vwap",False)):
+    if bool(cfg.get("enable_vwap", False)):
         from src.features.session_vwap import add_session_vwap
-        df=add_session_vwap(df)
 
-    if bool(cfg.get("enable_fractional_diff",False)):
+        df = add_session_vwap(df)
+
+    if bool(cfg.get("enable_fractional_diff", False)):
         from src.features.fractional_diff import add_fractional_diff_feature
-        df=add_fractional_diff_feature(
+
+        df = add_fractional_diff_feature(
             df,
-            d=float(cfg.get("fractional_diff_d",0.4)),
-            threshold=float(cfg.get("fractional_diff_threshold",1e-5)),
-            max_lags=int(cfg.get("fractional_diff_max_lags",200)),
+            d=float(cfg.get("fractional_diff_d", 0.4)),
+            threshold=float(cfg.get("fractional_diff_threshold", 1e-5)),
+            max_lags=int(cfg.get("fractional_diff_max_lags", 200)),
         )
 
-    df.write_parquet("data/silver/5m_features.parquet")
+    dest = Path("data/silver/5m_features.parquet")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(dest)
     print(f"feature dataset: {df.shape}")
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     run()

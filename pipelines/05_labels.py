@@ -23,7 +23,9 @@ def run():
         max_horizon_minutes=int(cfg["max_horizon_minutes"]),
         direction=cfg["direction"],
     )
-    labeled.write_parquet("data/gold/dataset_v1.parquet")
+    dest = Path("data/gold/dataset_v1.parquet")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    labeled.write_parquet(dest)
     print(f"labeled dataset: {labeled.shape}")
 
 
