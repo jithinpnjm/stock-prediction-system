@@ -121,6 +121,8 @@ The repository contains ingest -> validate -> aggregate -> feature -> label -> d
 These are implementation/research gaps, in priority order.
 
 ### P0 — software foundation
+
+**Handoff scope note (2026-09-18):** The repository foundation is being handed to the next research-execution agent after the final causality/session audit. CI still has two aggregation test failures; these are isolated test/foundation defects and must be repaired before treating `main` as CI-green. No real historical/GPU run is part of this handoff.
 1. Make the full test suite pass on the merged `main`.
 2. Reconcile inherited legacy APIs/modules with the canonical rebuild.
 3. Remove or explicitly mark duplicate implementations so there is one canonical path.
