@@ -10,7 +10,7 @@ source:
 
 ingestion:
   allow_legacy_files:
-    - "data/raw/1m_data.parquet"
     - "data/banknifty_spot_1m.csv"
   bronze_path: "data/bronze/1m_canonical.parquet"
   holidays_path: "configs/data/nse_holidays.csv"
+  session_overrides_path: "configs/data/session_overrides.csv"
