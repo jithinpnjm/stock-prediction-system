@@ -1,0 +1,22 @@
+# Dates/timestamps excluded from the canonical dataset, with reasons.
+#
+# These are NOT exchange holidays (see nse_holidays.yaml) -- they are
+# either abbreviated special sessions the raw 1m feed does not capture
+# on the standard 09:15-15:30 cadence, or vendor-feed data-quality
+# incidents. Every exclusion must be reasoned and auditable; never drop
+# a day/row silently.
+excluded_dates:
+  - date: "2021-11-04"
+    reason: "Diwali Balipratipada Muhurat trading -- abbreviated special session, not standard 09:15-15:30 hours (only 43 of 375 expected 1m bars present)"
+  - date: "2022-03-07"
+    reason: "vendor feed dropout: ~50-minute gap plus one corrupt candle (open>high) around 10:56-10:57 IST (only 325 of 375 expected 1m bars present)"
+  - date: "2022-10-24"
+    reason: "Diwali Muhurat trading -- abbreviated special session (no standard-session data present)"
+  - date: "2024-11-01"
+    reason: "Diwali Muhurat trading -- abbreviated special session (no standard-session data present)"
+  - date: "2025-10-21"
+    reason: "Diwali Muhurat trading -- abbreviated special session (only 61 of 375 expected 1m bars present)"
+
+excluded_timestamps:
+  - source_timestamp: "2023-11-08 09:15:00"
+    reason: "corrupt candle: open/close inconsistent with high/low (single-tick vendor error), otherwise a complete trading day"
