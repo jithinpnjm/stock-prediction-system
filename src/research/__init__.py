@@ -1,1 +1,1 @@
-"""Research and feature-discovery tools."""
+"""Controlled research utilities."""

@@ -1,23 +1,10 @@
 from __future__ import annotations
+import json,platform,sys
+from pathlib import Path
 
-import os
-import random
+def runtime_snapshot():
+    return {"python":sys.version,"platform":platform.platform(),"machine":platform.machine(),"processor":platform.processor()}
 
-import numpy as np
-
-
-def seed_everything(seed: int = 42) -> None:
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    random.seed(seed)
-    np.random.seed(seed)
-    try:
-        import torch
-
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.use_deterministic_algorithms(False)
-        if hasattr(torch.backends, "cudnn"):
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
-    except ImportError:
-        pass
+def write_runtime_snapshot(path:str|Path):
+    p=Path(path); p.parent.mkdir(parents=True,exist_ok=True)
+    p.write_text(json.dumps(runtime_snapshot(),indent=2)+"\n")

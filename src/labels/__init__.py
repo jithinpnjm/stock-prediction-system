@@ -1,1 +1,1 @@
-"""Event labeling and path statistics."""
+"""Leakage-safe event labeling utilities."""

@@ -1,71 +1,37 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import polars as pl
 
-
-METADATA = {
-    "session_date",
-    "timestamp",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "label",
-    "event_end",
-    "entry_time",
-    "barrier_type",
-    "barrier_time",
-    "path_complete",
-    "long_outcome",
-    "short_outcome",
-    "time_to_barrier_min",
-    "mfe_long",
-    "mae_long",
-    "mfe_short",
-    "mae_short",
-    "mfe_time_long",
-    "mae_time_long",
-    "mfe_time_short",
-    "mae_time_short",
+OUTCOME_COLUMNS={
+    "label","event_end_timestamp","barrier_timestamp",
+    "target_points","stop_points","max_horizon_minutes",
+    "mfe_long_points","mae_long_points","mfe_short_points","mae_short_points",
+    "mfe_points","mae_points","time_to_barrier_seconds",
 }
 
 
-def run() -> None:
-    df = pl.read_parquet("data/gold/dataset_v1.parquet")
-    if "path_complete" in df.columns:
-        df = df.filter(pl.col("path_complete"))
-    if "barrier_type" in df.columns:
-        df = df.filter(pl.col("barrier_type") != "ambiguous")
-
-    candidates = []
-    for column, dtype in df.schema.items():
-        if column in METADATA:
-            continue
-        if dtype.is_numeric():
-            candidates.append(column)
-
-    if not candidates:
-        raise ValueError("No numeric features available")
-
-    # Missing values are never silently interpreted as zero. We remove only rows
-    # that lack a value for a feature used by the model.
-    train = df.drop_nulls(subset=candidates)
-    train = train.select(["timestamp", "event_end", "label", *candidates])
-
-    os.makedirs("data/ml", exist_ok=True)
-    train.write_parquet("data/ml/training_frame.parquet", compression="zstd")
-    train.select(candidates).write_parquet("data/ml/X.parquet", compression="zstd")
-    train.select("label").write_parquet("data/ml/y.parquet", compression="zstd")
-    Path("data/ml/feature_columns.json").write_text(
-        json.dumps(candidates, indent=2) + "\n", encoding="utf-8"
+def run():
+    df=pl.read_parquet("data/gold/dataset_v1.parquet")
+    feature_columns=[
+        c for c in df.columns if c.startswith("f_") and c not in OUTCOME_COLUMNS
+    ]
+    if not feature_columns:
+        raise ValueError("No feature columns found")
+    usable=df.drop_nulls(subset=feature_columns+["label","event_end_timestamp"]).sort("timestamp")
+    if usable.is_empty():
+        raise ValueError("No rows remain after enforcing feature availability")
+    usable.select(["timestamp","event_end_timestamp","label",*feature_columns]).write_parquet(
+        "data/ml/training_dataset.parquet"
     )
-    print(f"Training frame: {train.height} rows x {len(candidates)} features")
+    Path("data/ml").mkdir(parents=True,exist_ok=True)
+    Path("data/ml/feature_schema.json").write_text(
+        json.dumps({"feature_columns":feature_columns,"feature_count":len(feature_columns)},indent=2)+"\n"
+    )
+    print(f"trainable rows={usable.height}, features={len(feature_columns)}")
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     run()
