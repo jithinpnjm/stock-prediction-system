@@ -37,8 +37,7 @@ outputs/
 .vscode/
 .DS_Store
 
-data/
-models/
+/data/
+/models/
 mlflow.db
 *.log
-

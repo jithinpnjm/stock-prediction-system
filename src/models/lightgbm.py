@@ -1,13 +1,15 @@
+from typing import Any
+
 import lightgbm as lgb
 import numpy as np
-from typing import Dict, Any
+
 
 def train_lightgbm_classifier(
-    X_train: np.ndarray, 
-    y_train: np.ndarray, 
-    X_val: np.ndarray, 
-    y_val: np.ndarray, 
-    params: Dict[str, Any] = None
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    params: dict[str, Any] = None,
 ) -> lgb.Booster:
     """
     Trains a LightGBM classifier.
@@ -39,10 +41,11 @@ def train_lightgbm_classifier(
         train_data,
         num_boost_round=1000,
         valid_sets=[train_data, val_data],
-        callbacks=[lgb.early_stopping(stopping_rounds=25, verbose=False)]
+        callbacks=[lgb.early_stopping(stopping_rounds=25, verbose=False)],
     )
-    
+
     return model
+
 
 def predict_lightgbm(model: lgb.Booster, X: np.ndarray) -> np.ndarray:
     """

@@ -1,5 +1,5 @@
-from dataclasses import dataclass, field
-from typing import List, Dict
+from dataclasses import dataclass
+
 
 @dataclass
 class Trade:
@@ -11,6 +11,7 @@ class Trade:
     exit_price: float = None
     pnl: float = 0.0
 
+
 class Portfolio:
     def __init__(self, initial_capital: float = 100000.0):
         self.initial_capital = initial_capital
@@ -19,13 +20,15 @@ class Portfolio:
         self.position_size = 0.0
         self.entry_price = 0.0
         self.entry_time = None
-        self.trade_history: List[Trade] = []
+        self.trade_history: list[Trade] = []
 
     def update_portfolio(self, current_price: float) -> float:
         """Returns the mark-to-market value of the portfolio."""
         if self.position == 0:
             return self.cash
-        
+
         # Calculate unrealized PnL
-        unrealized_pnl = (current_price - self.entry_price) * self.position * self.position_size
+        unrealized_pnl = (
+            (current_price - self.entry_price) * self.position * self.position_size
+        )
         return self.cash + unrealized_pnl

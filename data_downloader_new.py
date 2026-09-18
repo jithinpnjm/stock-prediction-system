@@ -19,14 +19,16 @@ Resumable / retryable by design:
 Run this any time to fill in whatever is missing:
     python3 data_downloader_new.py
 """
-import os
 import json
+import os
 import time
 import warnings
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta
+from datetime import time as dt_time
 
 import pandas as pd
 import pytz
+
 import fyers_auth
 
 warnings.filterwarnings("ignore")
@@ -38,10 +40,10 @@ MARKET_CLOSE_TIME = dt_time(15, 30)
 # CONFIGURATION
 # ============================================================================
 SYMBOL = "NSE:NIFTYBANK-INDEX"
-RESOLUTION = "1"          # 1-minute candles
+RESOLUTION = "1"  # 1-minute candles
 YEARS_BACK = 5
-CHUNK_DAYS = 60           # Fyers cap per history() call for sub-daily resolutions
-INTER_CHUNK_SLEEP = 1.5   # seconds between chunk requests (rate-limit safety)
+CHUNK_DAYS = 60  # Fyers cap per history() call for sub-daily resolutions
+INTER_CHUNK_SLEEP = 1.5  # seconds between chunk requests (rate-limit safety)
 MAX_ATTEMPTS = 3
 MIN_CANDLES_FOR_COMPLETE_DAY = 50  # below this, a trading day is treated as a gap
 
@@ -124,9 +126,7 @@ def find_gap_ranges(df, no_data_days, start_date, end_date):
         if d.weekday() < 5:  # Mon-Fri only; weekends never trade
             if d in no_data_days:
                 pass
-            elif today_is_stale(d):
-                missing_days.append(d)
-            elif d not in good_days:
+            elif today_is_stale(d) or d not in good_days:
                 missing_days.append(d)
         d += timedelta(days=1)
 
@@ -174,13 +174,17 @@ def fetch_range(fyers_client, start_date, end_date):
                 response = fyers_client.history(data=data)
 
                 if not isinstance(response, dict):
-                    print(f"   ⚠️ Invalid API response (attempt {attempt + 1}/{MAX_ATTEMPTS}): {response}")
+                    print(
+                        f"   ⚠️ Invalid API response (attempt {attempt + 1}/{MAX_ATTEMPTS}): {response}"
+                    )
                     time.sleep(5 * (attempt + 1))
                     continue
 
                 if response.get("code") == -429:
                     wait = 15 * (attempt + 1)
-                    print(f"   ⏳ Rate limit. Waiting {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})...")
+                    print(
+                        f"   ⏳ Rate limit. Waiting {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})..."
+                    )
                     time.sleep(wait)
                     continue
 
@@ -190,7 +194,8 @@ def fetch_range(fyers_client, start_date, end_date):
 
                 if response.get("s") == "ok" and "candles" in response:
                     cdf = pd.DataFrame(
-                        response["candles"], columns=["ts", "open", "high", "low", "close", "volume"]
+                        response["candles"],
+                        columns=["ts", "open", "high", "low", "close", "volume"],
                     )
                     if not cdf.empty:
                         cdf["datetime"] = (
@@ -205,7 +210,9 @@ def fetch_range(fyers_client, start_date, end_date):
 
                 err_code = response.get("code", "?")
                 err_msg = response.get("message", str(response))
-                print(f"   ⚠️ API error (attempt {attempt + 1}/{MAX_ATTEMPTS}): [{err_code}] {err_msg}")
+                print(
+                    f"   ⚠️ API error (attempt {attempt + 1}/{MAX_ATTEMPTS}): [{err_code}] {err_msg}"
+                )
                 if err_code in FATAL_CODES:
                     print(f"   ❌ Fatal error [{err_code}] — aborting this chunk.")
                     break
@@ -218,7 +225,9 @@ def fetch_range(fyers_client, start_date, end_date):
                 time.sleep(5 * (attempt + 1))
 
         if not chunk_success:
-            print(f"   ❌ Gave up on {curr_start.date()} → {curr_end.date()} after {MAX_ATTEMPTS} attempts")
+            print(
+                f"   ❌ Gave up on {curr_start.date()} → {curr_end.date()} after {MAX_ATTEMPTS} attempts"
+            )
             failed_windows.append((curr_start.date(), curr_end.date()))
 
         time.sleep(INTER_CHUNK_SLEEP)
@@ -232,9 +241,13 @@ def fetch_range(fyers_client, start_date, end_date):
             .sort_values("datetime")
             .reset_index(drop=True)
         )
-        return combined[["datetime", "open", "high", "low", "close", "volume"]], failed_windows
+        return combined[
+            ["datetime", "open", "high", "low", "close", "volume"]
+        ], failed_windows
 
-    return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"]), failed_windows
+    return pd.DataFrame(
+        columns=["datetime", "open", "high", "low", "close", "volume"]
+    ), failed_windows
 
 
 def run():
@@ -245,8 +258,14 @@ def run():
 
     existing = load_existing()
     no_data_days = load_no_data_days()
-    print(f"   Existing rows : {len(existing)}"
-          + (f" ({existing['datetime'].min()} → {existing['datetime'].max()})" if not existing.empty else ""))
+    print(
+        f"   Existing rows : {len(existing)}"
+        + (
+            f" ({existing['datetime'].min()} → {existing['datetime'].max()})"
+            if not existing.empty
+            else ""
+        )
+    )
     print(f"   Known no-data days cached : {len(no_data_days)}")
 
     gap_ranges = find_gap_ranges(existing, no_data_days, START_DATE, END_DATE)
@@ -263,7 +282,9 @@ def run():
         new_data, failed_windows = fetch_range(fyers, range_start, range_end)
 
         existing = save_merged(existing, new_data)
-        print(f"   💾 Saved — {len(new_data)} new rows → {len(existing)} total rows on disk")
+        print(
+            f"   💾 Saved — {len(new_data)} new rows → {len(existing)} total rows on disk"
+        )
 
         failed_days = set()
         for fs, fe in failed_windows:
@@ -272,7 +293,9 @@ def run():
                 failed_days.add(d)
                 d += timedelta(days=1)
 
-        fetched_days = set(new_data["datetime"].dt.date) if not new_data.empty else set()
+        fetched_days = (
+            set(new_data["datetime"].dt.date) if not new_data.empty else set()
+        )
         today = datetime.now(IST).date()
         d = range_start
         while d <= range_end:
@@ -287,9 +310,13 @@ def run():
         save_no_data_days(no_data_days)
 
     print("\n📊 Final check...")
-    remaining = find_gap_ranges(load_existing(), load_no_data_days(), START_DATE, END_DATE)
+    remaining = find_gap_ranges(
+        load_existing(), load_no_data_days(), START_DATE, END_DATE
+    )
     if remaining:
-        print(f"   ⚠️ {len(remaining)} range(s) still incomplete (rate-limited or fatal errors above) — rerun to retry:")
+        print(
+            f"   ⚠️ {len(remaining)} range(s) still incomplete (rate-limited or fatal errors above) — rerun to retry:"
+        )
         for s, e in remaining:
             print(f"      - {s} → {e}")
     else:
