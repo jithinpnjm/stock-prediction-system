@@ -1,40 +1,35 @@
+from __future__ import annotations
+
 import os
-import sys
+from pathlib import Path
 
 import polars as pl
 
+from src.data.ingest import read_source
+from src.data.schemas import validate_required_schema
+
 
 def run():
-    print("Running pipeline step: 01_ingest.py")
-
-    # User will override this path dynamically based on Nebius storage mounts
-    RAW_DATA_PATH = os.environ.get("RAW_1M_DATA_PATH", "data/raw/1m_data.parquet")
-
-    if not os.path.exists(RAW_DATA_PATH):
-        print(f"ERROR: Raw data not found at {RAW_DATA_PATH}.")
-        print("Please mount your data or set RAW_1M_DATA_PATH environment variable.")
-        print(
-            "To generate synthetic mock data for testing, run: python tests/data_quality/mock_data.py"
-        )
-        sys.exit(1)
-
+    source=os.getenv("RAW_SOURCE_PATH","data/raw/fyers")
+    legacy_candidates=[
+        Path("data/banknifty_spot_1m.csv"),
+        Path("data/raw/1m_data.parquet"),
+    ]
     try:
-        # We enforce reading as Parquet as described in the architecture plan
-        df = pl.read_parquet(RAW_DATA_PATH)
-
-        # Validate schema basics
-        required_cols = {"datetime", "open", "high", "low", "close", "volume"}
-        if not required_cols.issubset(set(df.columns)):
-            raise ValueError(
-                f"Data is missing required columns. Needs: {required_cols}"
-            )
-
-        print(f"Successfully ingested {df.height} rows from {RAW_DATA_PATH}")
-
-    except Exception as e:
-        print(f"Data ingestion failed: {e!s}")
-        sys.exit(1)
+        df=read_source(source)
+    except FileNotFoundError:
+        for candidate in legacy_candidates:
+            if candidate.exists():
+                df=read_source(candidate)
+                break
+        else:
+            raise
+    validate_required_schema(df)
+    out=Path(os.getenv("BRONZE_PATH","data/bronze/validated_1m.parquet"))
+    out.parent.mkdir(parents=True,exist_ok=True)
+    df.write_parquet(out)
+    print(f"ingested {df.height} rows -> {out}")
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     run()
