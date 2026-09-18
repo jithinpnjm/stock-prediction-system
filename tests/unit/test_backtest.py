@@ -9,8 +9,11 @@ from src.backtest.execution import ExecutionConfig
 
 def test_backtest_respects_latency_and_closes_position():
     tz = ZoneInfo("Asia/Kolkata")
-    signal_time = datetime(2026, 1, 5, 9, 20, tzinfo=tz)
-    bar_times = [signal_time + timedelta(minutes=i) for i in (1, 2)]
+    signal_time = datetime(2026, 1, 5, 9, 30, tzinfo=tz)
+    bar_times = [
+        signal_time + timedelta(minutes=1),
+        signal_time + timedelta(minutes=2),
+    ]
     bars = pl.DataFrame(
         {
             "timestamp": bar_times,
