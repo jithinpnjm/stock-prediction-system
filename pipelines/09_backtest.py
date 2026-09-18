@@ -16,13 +16,15 @@ def run() -> None:
     cfg = load_yaml(os.getenv("BACKTEST_CONFIG", "configs/backtest/default.yaml"))
     prices = pl.read_parquet("data/silver/5m_canonical.parquet")
     predictions = pl.read_parquet("data/ml/oof_predictions.parquet")
-    merged = predictions.join(prices, on="timestamp", how="inner")
+    merged = predictions.join(prices, on="timestamp", how="inner").sort("timestamp")
     decisions = build_trade_decisions(
         merged,
         min_confidence=float(cfg["min_confidence"]),
         min_edge=float(cfg["min_edge"]),
+        target_points=200.0,
+        stop_points=70.0,
     )
-    bt = EventDrivenBacktester(
+    backtester = EventDrivenBacktester(
         decisions,
         initial_capital=float(cfg["initial_capital"]),
         units=float(cfg["units"]),
@@ -36,7 +38,7 @@ def run() -> None:
             transaction_cost_bps=float(cfg["transaction_cost_bps"]),
         ),
     )
-    equity, trades = bt.run()
+    equity, trades = backtester.run()
     os.makedirs("data/backtest", exist_ok=True)
     equity.write_parquet("data/backtest/equity_curve.parquet", compression="zstd")
     pl.DataFrame(
@@ -55,10 +57,10 @@ def run() -> None:
             for t in trades
         ]
     ).write_parquet("data/backtest/trades.parquet", compression="zstd")
-    Path("data/backtest/predictions_with_prices.parquet").write_bytes(
-        decisions.write_parquet(None) if False else b""
+    decisions.write_parquet(
+        "data/backtest/predictions_with_prices.parquet",
+        compression="zstd",
     )
-    decisions.write_parquet("data/backtest/predictions_with_prices.parquet", compression="zstd")
     print(f"Backtest produced {len(trades)} trades")
 
 

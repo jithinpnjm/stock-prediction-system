@@ -40,6 +40,7 @@ def make_lightgbm_classifier(
         "colsample_bytree": 0.8,
         "reg_alpha": 0.1,
         "reg_lambda": 0.5,
+        "class_weight": "balanced",
         "random_state": seed,
         "verbosity": -1,
         "n_jobs": -1,
@@ -67,34 +68,8 @@ def make_xgboost_classifier(*, seed: int = 42, params: dict[str, Any] | None = N
     return XGBClassifier(**base)
 
 
-def fit_with_early_stopping(model, X_train, y_train, X_val, y_val):
-    kwargs = {"eval_set": [(X_val, y_val)]}
-    if hasattr(model, "fit"):
-        try:
-            model.fit(
-                X_train,
-                y_train,
-                callbacks=[],
-                **kwargs,
-            )
-        except TypeError:
-            model.fit(X_train, y_train, **kwargs)
-    return model
-
-
-def align_classes(probabilities: np.ndarray, classes: np.ndarray, class_order=(-1, 0, 1)) -> np.ndarray:
-    out = np.zeros((len(probabilities), len(class_order)), dtype=float)
-    for i, cls in enumerate(class_order):
-        matches = np.flatnonzero(classes == cls)
-        if matches.size:
-            out[:, i] = probabilities[:, matches[0]]
-    row_sum = out.sum(axis=1, keepdims=True)
-    return out / np.where(row_sum == 0, 1.0, row_sum)
-
-
-def predict_probabilities(model, X: np.ndarray, *, class_order=(-1, 0, 1)) -> np.ndarray:
+def predict_probabilities(model, X: np.ndarray) -> np.ndarray:
     probabilities = np.asarray(model.predict_proba(X))
-    classes = np.asarray(getattr(model, "classes_", np.arange(probabilities.shape[1]) - 1))
-    if probabilities.shape[1] == len(class_order) and set(classes.tolist()) == set(class_order):
-        return align_classes(probabilities, classes, class_order)
+    if probabilities.shape[1] != 3:
+        raise ValueError("Expected a 3-class probability output")
     return probabilities

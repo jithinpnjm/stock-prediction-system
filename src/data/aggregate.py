@@ -4,7 +4,7 @@ from datetime import timedelta
 
 import polars as pl
 
-from src.common.contracts import MARKET_TIMEZONE, SESSION_CLOSE, SESSION_OPEN
+from src.common.contracts import MARKET_TIMEZONE, SESSION_OPEN
 from src.data.calendar import expected_5m_close_timestamps
 
 
@@ -15,37 +15,27 @@ def aggregate_1m_to_5m(
 ) -> pl.DataFrame:
     if df_1m.is_empty():
         raise ValueError("Cannot aggregate empty 1m data")
-    df = df_1m.sort("timestamp")
 
-    # Fyers-style source timestamps represent candle start. Build 5m windows
-    # anchored at 09:15 and explicitly label each bucket by candle close.
+    # 1m timestamps are bar-start timestamps. Buckets are anchored to the
+    # 09:15 session open and the 5m output timestamp is the bucket close.
+    minute_of_day = pl.col("timestamp").dt.hour() * 60 + pl.col("timestamp").dt.minute()
+    session_open_minutes = SESSION_OPEN.hour * 60 + SESSION_OPEN.minute
+    bucket_index = (
+        ((minute_of_day - session_open_minutes) / 5.0)
+        .floor()
+        .cast(pl.Int64)
+    )
+
     out = (
-        df.with_columns(
-            (
-                pl.col("timestamp")
-                - pl.col("timestamp").dt.truncate("1d")
-                + pl.lit(SESSION_OPEN)
-            ).alias("_session_anchor")
-        )
+        df_1m.sort("timestamp")
         .with_columns(
-            (
-                (
-                    (
-                        pl.col("timestamp").dt.hour() * 60
-                        + pl.col("timestamp").dt.minute()
-                    )
-                    - (SESSION_OPEN.hour * 60 + SESSION_OPEN.minute)
-                )
-                .floordiv(5)
-                .clip(lower_bound=0)
-            ).alias("_bucket_index")
+            [
+                bucket_index.alias("_bucket_index"),
+                pl.col("timestamp").dt.date().alias("session_date"),
+            ]
         )
-        .with_columns(
-            (
-                pl.col("timestamp").dt.date().cast(pl.String).str.to_date()
-            ).alias("_date")
-        )
-        .group_by(["_date", "_bucket_index"], maintain_order=True)
+        .filter(pl.col("_bucket_index").is_between(0, 74))
+        .group_by(["session_date", "_bucket_index"], maintain_order=True)
         .agg(
             [
                 pl.col("open").first().alias("open"),
@@ -58,13 +48,11 @@ def aggregate_1m_to_5m(
         )
         .with_columns(
             (
-                pl.col("_date").cast(pl.Datetime(time_zone=MARKET_TIMEZONE))
-                + pl.duration(minutes=SESSION_OPEN.hour * 60 + SESSION_OPEN.minute)
-                + pl.duration(minutes=5)
-                * (pl.col("_bucket_index") + 1)
+                pl.col("session_date").cast(pl.Datetime(time_zone=MARKET_TIMEZONE))
+                + pl.duration(minutes=session_open_minutes)
+                + pl.duration(minutes=5) * (pl.col("_bucket_index") + 1)
             ).alias("timestamp")
         )
-        .with_columns(pl.col("_date").alias("session_date"))
         .select(
             [
                 "session_date",
@@ -82,7 +70,6 @@ def aggregate_1m_to_5m(
 
     if drop_incomplete:
         out = out.filter(pl.col("source_1m_count") == 5)
-
     if out.is_empty():
         raise ValueError("No complete 5m buckets after aggregation")
     return out
@@ -91,16 +78,22 @@ def aggregate_1m_to_5m(
 def validate_aggregation(df_5m: pl.DataFrame) -> None:
     if df_5m.is_empty():
         raise ValueError("5m dataset is empty")
-    if df_5m.filter(
+    invalid = df_5m.filter(
         (pl.col("high") < pl.col("low"))
         | (pl.col("open") < pl.col("low"))
         | (pl.col("open") > pl.col("high"))
         | (pl.col("close") < pl.col("low"))
         | (pl.col("close") > pl.col("high"))
-    ).height:
-        raise ValueError("Invalid 5m OHLC geometry")
+    )
+    if invalid.height:
+        raise ValueError(f"Invalid 5m OHLC rows: {invalid.height}")
 
-    for session, expected in (
-        ("session", len(expected_5m_close_timestamps)),
-    ):
-        _ = session, expected
+    expected_last = df_5m.group_by("session_date").agg(
+        [
+            pl.len().alias("count"),
+            pl.col("timestamp").max().alias("last_timestamp"),
+        ]
+    )
+    bad_counts = expected_last.filter(pl.col("count") > 75)
+    if bad_counts.height:
+        raise ValueError("5m dataset contains more than 75 buckets in a session")

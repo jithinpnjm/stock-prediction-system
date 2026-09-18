@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from datetime import time
 
 import polars as pl
 
@@ -34,13 +34,6 @@ CANONICAL_5M_SCHEMA = {
 }
 
 
-@dataclass(frozen=True)
-class MarketSession:
-    session_date: object
-    open_time: object
-    close_time: object
-
-
 def required_ohlcv_columns() -> tuple[str, ...]:
     return ("timestamp", "open", "high", "low", "close", "volume")
 
@@ -54,27 +47,19 @@ def expected_bars(timeframe: str) -> int:
 
 
 def validate_schema(df: pl.DataFrame, timeframe: str) -> None:
-    required = set(required_ohlcv_columns())
-    missing = required - set(df.columns)
+    missing = set(required_ohlcv_columns()) - set(df.columns)
     if missing:
         raise ValueError(f"Missing required columns: {sorted(missing)}")
-
     if df.is_empty():
         raise ValueError("Dataset is empty")
-
-    if df.schema["timestamp"] != pl.Datetime(time_zone=MARKET_TIMEZONE):
+    timestamp_dtype = df.schema["timestamp"]
+    if timestamp_dtype != pl.Datetime(time_zone=MARKET_TIMEZONE):
         raise TypeError(
             f"timestamp must be timezone-aware {MARKET_TIMEZONE}; "
-            f"got {df.schema['timestamp']}"
+            f"got {timestamp_dtype}"
         )
-
     for column in ("open", "high", "low", "close", "volume"):
-        if not df.schema[column].is_numeric():
-            raise TypeError(f"{column} must be numeric")
-
-
-def in_session_expr() -> pl.Expr:
-    return (
-        (pl.col("timestamp").dt.time() >= SESSION_OPEN)
-        & (pl.col("timestamp").dt.time() < SESSION_CLOSE)
-    )
+        try:
+            df.select(pl.col(column).cast(pl.Float64, strict=True))
+        except Exception as exc:
+            raise TypeError(f"{column} must be numeric") from exc
