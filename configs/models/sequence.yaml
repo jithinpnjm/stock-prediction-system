@@ -1,4 +1,5 @@
 sequence_length: 48
+n_splits: 4
 epochs: 50
 batch_size: 256
 learning_rate: 0.001
