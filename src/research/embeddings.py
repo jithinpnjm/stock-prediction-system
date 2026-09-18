@@ -10,7 +10,7 @@ class FeatureEmbedder:
         self.scaler = StandardScaler()
         self.pca = PCA(n_components=n_components, random_state=seed)
 
-    def fit(self, X: np.ndarray) -> "FeatureEmbedder":
+    def fit(self, X: np.ndarray) -> FeatureEmbedder:
         self.pca.fit(self.scaler.fit_transform(X))
         return self
 

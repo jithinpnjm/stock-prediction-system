@@ -11,7 +11,7 @@ class AnalogueSearcher:
         self.index = NearestNeighbors(n_neighbors=n_neighbors, metric="euclidean")
         self.matrix = None
 
-    def fit(self, X: np.ndarray) -> "AnalogueSearcher":
+    def fit(self, X: np.ndarray) -> AnalogueSearcher:
         self.matrix = self.scaler.fit_transform(X)
         self.index.fit(self.matrix)
         return self

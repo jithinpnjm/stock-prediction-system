@@ -1,42 +1,33 @@
-import os
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import polars as pl
 
+from src.common.contracts import MARKET_TIMEZONE
 
-def generate_mock_data():
-    """Generates synthetic 1m data for local pipeline testing."""
+
+def generate_mock_data(path: str = "data/raw/1m_data.parquet", sessions: int = 3) -> None:
+    os = __import__("os")
     os.makedirs("data/raw", exist_ok=True)
-
-    from datetime import datetime, timedelta
-
-    base = datetime(2023, 1, 1, 9, 15)
-
-    # Generate 5,000 minutes of data (~13 days of Bank Nifty)
-    dates = [base + timedelta(minutes=i) for i in range(5000)]
-
-    # Simulate a random walk for prices
-    np.random.seed(42)
-    returns = np.random.normal(0, 5, size=5000)
-    close = 40000 + np.cumsum(returns)
-
-    open_prices = close - np.random.normal(0, 2, size=5000)
-    high_prices = np.maximum(open_prices, close) + np.random.uniform(0, 10, size=5000)
-    low_prices = np.minimum(open_prices, close) - np.random.uniform(0, 10, size=5000)
-
-    df = pl.DataFrame(
-        {
-            "datetime": dates,
-            "open": open_prices,
-            "high": high_prices,
-            "low": low_prices,
-            "close": close,
-            "volume": np.random.randint(100, 5000, size=5000),
-        }
-    )
-
-    df.write_parquet("data/raw/1m_data.parquet")
-    print(f"Generated mock data at data/raw/1m_data.parquet with {df.height} rows.")
+    tz = ZoneInfo(MARKET_TIMEZONE)
+    timestamps = []
+    for offset in range(sessions):
+        day = date(2026, 1, 5) + timedelta(days=offset)
+        while day.weekday() >= 5:
+            day += timedelta(days=1)
+        start = datetime(day.year, day.month, day.day, 9, 15, tzinfo=tz)
+        timestamps.extend(start + timedelta(minutes=i) for i in range(375))
+    rng = np.random.default_rng(42)
+    close = 40000 + np.cumsum(rng.normal(0, 5, len(timestamps)))
+    open_prices = close - rng.normal(0, 2, len(timestamps))
+    high = np.maximum(open_prices, close) + rng.uniform(0, 10, len(timestamps))
+    low = np.minimum(open_prices, close) - rng.uniform(0, 10, len(timestamps))
+    df = pl.DataFrame({"datetime": timestamps, "open": open_prices, "high": high, "low": low, "close": close, "volume": rng.integers(100, 5000, len(timestamps))})
+    df.write_parquet(path)
+    print(f"Generated {df.height} valid session-aware 1m rows at {path}")
 
 
 if __name__ == "__main__":
