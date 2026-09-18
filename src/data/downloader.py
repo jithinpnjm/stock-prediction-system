@@ -142,8 +142,7 @@ def _load_state(path: Path) -> set[date]:
 
 def _save_state(path: Path, days: set[date]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(sorted(d.isoformat() for d in days), indent=2) + "
-")
+    path.write_text(json.dumps(sorted(d.isoformat() for d in days), indent=2) + "\n")
 
 
 def mark_no_data_day(path: str | Path, trading_date: date) -> None:
