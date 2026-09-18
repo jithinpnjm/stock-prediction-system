@@ -36,6 +36,7 @@ def _state_arrays(
                 elif high[i] < prev_h:
                     lh[i] = 1
             prev_h = high[i]
+
         if swing_low[i]:
             if np.isfinite(prev_l):
                 if low[i] > prev_l:
@@ -80,9 +81,12 @@ def add_market_structure_features(df: pl.DataFrame) -> pl.DataFrame:
     )
 
     eps = 1e-9
+    high_series = pl.Series("f_last_swing_high", last_high).fill_nan(None)
+    low_series = pl.Series("f_last_swing_low", last_low).fill_nan(None)
+
     out = out.with_columns(
-        pl.Series("f_last_swing_high", last_high),
-        pl.Series("f_last_swing_low", last_low),
+        high_series,
+        low_series,
         pl.Series("f_higher_high", hh, dtype=pl.Int8),
         pl.Series("f_lower_high", lh, dtype=pl.Int8),
         pl.Series("f_higher_low", hl, dtype=pl.Int8),
@@ -112,4 +116,5 @@ def add_market_structure_features(df: pl.DataFrame) -> pl.DataFrame:
             - pl.col("low").rolling_min(12).over("_session_date")
         ).alias("f_short_structure_range"),
     )
+
     return out.drop("_session_date")
