@@ -13,16 +13,20 @@ def aggregate_1m_to_5m(
 )->pl.DataFrame:
     if df_1m.is_empty():
         return df_1m
+
     df=calendar.filter_session(df_1m).sort("timestamp")
     local=pl.col("timestamp").dt.convert_time_zone(calendar.timezone)
     session_minute=(
         local.dt.hour()*60+local.dt.minute()
         -(calendar.session_open.hour*60+calendar.session_open.minute)
     )
+    # Canonical 1m close timestamps are 09:16..15:30. Bucket boundaries are
+    # 09:20, 09:25, ... 15:30.
     df=df.with_columns(
-        (((session_minute-1)//5).cast(pl.Int32)).alias("_bucket"),
+        (((session_minute+4)/5).floor().cast(pl.Int32)).alias("_bucket"),
         pl.col("timestamp").dt.date().alias("_session_date"),
     )
+
     out=(
         df.group_by(["_session_date","_bucket"],maintain_order=True)
         .agg(
@@ -39,19 +43,20 @@ def aggregate_1m_to_5m(
     )
     if drop_incomplete:
         out=out.filter(pl.col("_n_1m")==5)
-    return out.select([
-        pl.col("_last_ts").alias("timestamp"),
-        "open","high","low","close","volume"
-    ])
+    return out.select(["_last_ts","open","high","low","close","volume"]).rename(
+        {"_last_ts":"timestamp"}
+    )
 
 
 def validate_aggregation(df_5m:pl.DataFrame,calendar:NSECalendar|None=None)->None:
     if df_5m.is_empty():
         raise ValueError("5m dataset is empty")
     bad=df_5m.filter(
-        (pl.col("high")<pl.col("low"))|(pl.col("open")<pl.col("low"))|
-        (pl.col("open")>pl.col("high"))|(pl.col("close")<pl.col("low"))|
-        (pl.col("close")>pl.col("high"))
+        (pl.col("high")<pl.col("low"))
+        |(pl.col("open")<pl.col("low"))
+        |(pl.col("open")>pl.col("high"))
+        |(pl.col("close")<pl.col("low"))
+        |(pl.col("close")>pl.col("high"))
     )
     if bad.height:
         raise ValueError(f"invalid 5m OHLC geometry: {bad.height}")
@@ -59,14 +64,9 @@ def validate_aggregation(df_5m:pl.DataFrame,calendar:NSECalendar|None=None)->Non
         return
     for d in df_5m.select(pl.col("timestamp").dt.date().unique()).to_series().to_list():
         day=df_5m.filter(pl.col("timestamp").dt.date()==d).sort("timestamp")
-        if day.height!=75:
-            raise ValueError(f"{d}: expected 75 complete 5m bars, found {day.height}")
-        if day["timestamp"][0].strftime("%H:%M")!="09:20":
-            raise ValueError(f"{d}: first 5m availability timestamp must be 09:20")
-        if day["timestamp"][-1].strftime("%H:%M")!="15:30":
-            raise ValueError(f"{d}: last 5m availability timestamp must be 15:30")
-        deltas=day.with_columns(
-            pl.col("timestamp").diff().dt.total_seconds().alias("_d")
-        ).filter(pl.col("_d").is_not_null())
+        if day.height!=75: raise ValueError(f"{d}: expected 75 complete 5m bars, found {day.height}")
+        if day["timestamp"][0].strftime("%H:%M")!="09:20": raise ValueError(f"{d}: first timestamp must be 09:20")
+        if day["timestamp"][-1].strftime("%H:%M")!="15:30": raise ValueError(f"{d}: last timestamp must be 15:30")
+        deltas=day.with_columns(pl.col("timestamp").diff().dt.total_seconds().alias("_d")).filter(pl.col("_d").is_not_null())
         if deltas.filter(pl.col("_d")!=300).height:
             raise ValueError(f"{d}: canonical 5m timestamps are not exactly 5 minutes apart")

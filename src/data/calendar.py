@@ -8,11 +8,13 @@ from zoneinfo import ZoneInfo
 import polars as pl
 import yaml
 
+
 @dataclass(frozen=True)
 class Session:
     trading_date:date
     open_time:datetime
     close_time:datetime
+
 
 class NSECalendar:
     def __init__(
@@ -28,21 +30,28 @@ class NSECalendar:
     def from_yaml(cls,path:str|Path)->"NSECalendar":
         payload=yaml.safe_load(Path(path).read_text()) or {}
         holidays={date.fromisoformat(x) for x in payload.get("holidays",[])}
-        return cls(
-            holidays=holidays,
-            timezone=payload.get("timezone","Asia/Kolkata"),
-        )
+        return cls(holidays=holidays,timezone=payload.get("timezone","Asia/Kolkata"))
 
     def is_trading_day(self,d:date)->bool:
         return d.weekday()<5 and d not in self.holidays
 
     def session(self,d:date)->Session:
-        if not self.is_trading_day(d): raise ValueError(f"{d} is not a trading day")
+        if not self.is_trading_day(d):
+            raise ValueError(f"{d} is not a trading day")
         tz=ZoneInfo(self.timezone)
-        return Session(d,datetime.combine(d,self.session_open,tzinfo=tz),datetime.combine(d,self.session_close,tzinfo=tz))
+        return Session(
+            d,
+            datetime.combine(d,self.session_open,tzinfo=tz),
+            datetime.combine(d,self.session_close,tzinfo=tz),
+        )
 
     def expected_minute_count(self)->int:
-        return int((datetime.combine(date.today(),self.session_close)-datetime.combine(date.today(),self.session_open)).total_seconds()/60)
+        return int(
+            (
+                datetime.combine(date.today(),self.session_close)
+                - datetime.combine(date.today(),self.session_open)
+            ).total_seconds()/60
+        )
 
     def trading_days(self,start:date,end:date)->list[date]:
         out=[]; d=start
@@ -52,10 +61,14 @@ class NSECalendar:
         return out
 
     def filter_session(self,df:pl.DataFrame,timestamp_col="timestamp")->pl.DataFrame:
-        if df.is_empty(): return df
-        local=pl.col(timestamp_col).dt.convert_time_zone(self.timezone)
+        if df.is_empty():
+            return df
+        dtype=df[timestamp_col].dtype
+        if isinstance(dtype,pl.Datetime) and dtype.time_zone:
+            local=pl.col(timestamp_col).dt.convert_time_zone(self.timezone)
+        else:
+            local=pl.col(timestamp_col).dt.replace_time_zone(self.timezone)
         minutes=local.dt.hour()*60+local.dt.minute()
         lo=self.session_open.hour*60+self.session_open.minute
         hi=self.session_close.hour*60+self.session_close.minute
-        # Canonical timestamps are candle-close/availability times: (open, close].
         return df.filter((minutes>lo)&(minutes<=hi))
