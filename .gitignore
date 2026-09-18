@@ -31,11 +31,19 @@ models/
 outputs/
 logs/
 
-# Generated datasets; source-of-truth raw files are versioned through DVC.
+# Generated derived datasets
 data/bronze/
 data/silver/
 data/gold/
 data/ml/
 data/backtest/
+
+# Downloaded raw source payloads and generated manifests
 data/raw/fyers/*.parquet
 data/raw/fyers/*.csv
+data/raw/fyers_manifests/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
