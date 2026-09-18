@@ -33,7 +33,7 @@ def validate_required_schema(df: pl.DataFrame) -> None:
 
 def _localize_timestamp(df: pl.DataFrame, timezone: str) -> pl.Expr:
     dtype = df["timestamp"].dtype
-    if isinstance(dtype, pl.Datetime) and dtype.time_zone:
+    if getattr(dtype, "time_zone", None):
         return pl.col("timestamp").dt.convert_time_zone(timezone)
     return (
         pl.col("timestamp")
