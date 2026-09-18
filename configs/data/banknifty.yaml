@@ -13,4 +13,5 @@ ingestion:
     - "data/banknifty_spot_1m.csv"
   bronze_path: "data/bronze/1m_canonical.parquet"
   holidays_path: "configs/data/nse_holidays.csv"
+  closed_days_path: "data/banknifty_spot_1m_no_data_days.json"
   session_overrides_path: "configs/data/session_overrides.csv"
