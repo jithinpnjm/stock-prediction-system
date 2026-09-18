@@ -6,29 +6,39 @@ import polars as pl
 
 def cusum_events(
     returns: np.ndarray,
-    threshold: float,
+    thresholds: np.ndarray | float,
 ) -> np.ndarray:
-    s_pos = 0.0
-    s_neg = 0.0
-    events = np.zeros(len(returns), dtype=np.int8)
-    for i, r in enumerate(np.nan_to_num(returns, nan=0.0)):
-        s_pos = max(0.0, s_pos + r)
-        s_neg = min(0.0, s_neg + r)
-        if s_pos > threshold:
-            events[i] = 1
-            s_pos = 0.0
-        elif s_neg < -threshold:
-            events[i] = 1
-            s_neg = 0.0
+    r=np.asarray(returns,dtype=float)
+    t=np.full(len(r),float(thresholds)) if np.isscalar(thresholds) else np.asarray(thresholds,dtype=float)
+    pos=neg=0.0
+    events=np.zeros(len(r),dtype=np.int8)
+    for i,x in enumerate(np.nan_to_num(r,nan=0.0)):
+        threshold=max(float(t[i]),1e-9)
+        pos=max(0.0,pos+x); neg=min(0.0,neg+x)
+        if pos>threshold:
+            events[i]=1; pos=0.0; neg=0.0
+        elif neg<-threshold:
+            events[i]=1; pos=0.0; neg=0.0
     return events
 
 
 def add_event_sampling_features(
-    df: pl.DataFrame,
-    threshold_multiple: float = 2.0,
-) -> pl.DataFrame:
-    ret = df["close"].pct_change().to_numpy()
-    scale = float(np.nanstd(ret))
-    threshold = max(scale * threshold_multiple, 1e-6)
-    events = cusum_events(ret, threshold)
-    return df.with_columns(pl.Series("f_cusum_event", events, dtype=pl.Int8))
+    df:pl.DataFrame,
+    threshold_multiple:float=2.0,
+    volatility_lookback:int=60,
+)->pl.DataFrame:
+    out=df.sort("timestamp")
+    if "f_return_1" not in out.columns:
+        out=out.with_columns(
+            (pl.col("close")/pl.col("close").shift(1)-1).alias("f_return_1")
+        )
+    ret=out["f_return_1"].to_numpy()
+    scale=(
+        out["f_return_1"].rolling_std(volatility_lookback).shift(1).to_numpy()
+    )
+    threshold=np.nan_to_num(scale,nan=np.nanmedian(scale) if np.isfinite(scale).any() else 1e-4)
+    events=cusum_events(ret,threshold*threshold_multiple)
+    return out.with_columns(
+        pl.Series("f_cusum_event",events,dtype=pl.Int8),
+        pl.Series("f_cusum_threshold",threshold*threshold_multiple),
+    )
