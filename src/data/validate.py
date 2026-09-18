@@ -5,8 +5,12 @@ from datetime import date
 
 import polars as pl
 
-from src.common.contracts import SESSION_CLOSE, SESSION_OPEN
-from src.data.calendar import load_holidays
+from src.common.contracts import MARKET_TIMEZONE
+from src.data.calendar import (
+    get_session_spec,
+    load_holidays,
+    load_session_overrides,
+)
 from src.data.schemas import expected_bars, validate_schema
 
 
@@ -48,10 +52,17 @@ def validate_1m(
     df: pl.DataFrame,
     *,
     holidays_path: str | None = None,
+    session_overrides_path: str | None = None,
     require_complete_sessions: bool = True,
 ) -> ValidationReport:
     validate_schema(df, "1m")
-    holidays = load_holidays(holidays_path)
+
+    holidays = load_holidays(
+        holidays_path
+    )
+    overrides = load_session_overrides(
+        session_overrides_path
+    )
 
     duplicate_timestamps = int(
         df.height
@@ -76,26 +87,25 @@ def validate_1m(
         | (pl.col("volume") < 0)
     ).height
 
-    out_of_session = df.filter(
-        ~(
-            (pl.col("timestamp").dt.time() >= SESSION_OPEN)
-            & (pl.col("timestamp").dt.time() < SESSION_CLOSE)
-        )
-    ).height
-
     invalid_minute_alignment = df.filter(
         (pl.col("timestamp").dt.second() != 0)
         | (pl.col("timestamp").dt.microsecond() != 0)
+        | (
+            pl.col("timestamp")
+            .dt.time()
+            .is_null()
+        )
     ).height
 
     non_monotonic_sessions = 0
     timestamp_gap_count = 0
+    out_of_session = 0
     missing_session_bars = 0
     unexpected_sessions: list[date] = []
-    expected = expected_bars("1m")
 
     for session_df in df.partition_by(
-        "session_date", as_dict=False
+        "session_date",
+        as_dict=False,
     ):
         session = session_df.get_column(
             "session_date"
@@ -114,21 +124,49 @@ def validate_1m(
             non_monotonic_sessions += 1
 
         timestamp_gap_count += sum(
-            (later - earlier).total_seconds() != 60
+            (later - earlier).total_seconds()
+            != 60
             for earlier, later in zip(
                 timestamps,
                 timestamps[1:],
             )
         )
 
-        if session.weekday() >= 5 or session in holidays:
-            unexpected_sessions.append(session)
+        spec = get_session_spec(
+            session,
+            overrides,
+        )
+
+        out_of_session += sum(
+            not (
+                spec.session_open
+                <= timestamp.timetz().replace(
+                    tzinfo=None
+                )
+                < spec.session_close
+            )
+            for timestamp in timestamps
+        )
+
+        is_override = session in overrides
+        if (
+            not is_override
+            and (
+                session.weekday() >= 5
+                or session in holidays
+            )
+        ):
+            unexpected_sessions.append(
+                session
+            )
         elif (
             require_complete_sessions
-            and len(timestamps) != expected
+            and len(timestamps)
+            != spec.expected_1m_bars
         ):
             missing_session_bars += abs(
-                expected - len(timestamps)
+                spec.expected_1m_bars
+                - len(timestamps)
             )
 
     return ValidationReport(
@@ -137,15 +175,27 @@ def validate_1m(
             "session_date"
         ).n_unique(),
         duplicate_timestamps=duplicate_timestamps,
-        non_monotonic_sessions=non_monotonic_sessions,
-        timestamp_gap_count=timestamp_gap_count,
+        non_monotonic_sessions=(
+            non_monotonic_sessions
+        ),
+        timestamp_gap_count=(
+            timestamp_gap_count
+        ),
         invalid_geometry=invalid_geometry,
-        invalid_price_or_volume=invalid_price_or_volume,
+        invalid_price_or_volume=(
+            invalid_price_or_volume
+        ),
         out_of_session=out_of_session,
-        invalid_minute_alignment=invalid_minute_alignment,
-        missing_session_bars=missing_session_bars,
+        invalid_minute_alignment=(
+            invalid_minute_alignment
+        ),
+        missing_session_bars=(
+            missing_session_bars
+        ),
         unexpected_sessions=tuple(
-            sorted(set(unexpected_sessions))
+            sorted(
+                set(unexpected_sessions)
+            )
         ),
     )
 
