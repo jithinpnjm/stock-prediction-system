@@ -33,9 +33,13 @@ class NSECalendar:
     def from_yaml(cls, path: str | Path) -> "NSECalendar":
         payload = yaml.safe_load(Path(path).read_text()) or {}
         holidays = {date.fromisoformat(x) for x in payload.get("holidays", [])}
+        session_open = time.fromisoformat(payload.get("session_open", "09:15"))
+        session_close = time.fromisoformat(payload.get("session_close", "15:30"))
         return cls(
             holidays=holidays,
             timezone=payload.get("timezone", "Asia/Kolkata"),
+            session_open=session_open,
+            session_close=session_close,
         )
 
     def is_trading_day(self, d: date) -> bool:
