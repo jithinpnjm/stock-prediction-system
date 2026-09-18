@@ -22,7 +22,7 @@ from src.features.volatility import add_volatility_features
 def run():
     cfg=yaml.safe_load(Path("configs/features/default.yaml").read_text())
     df5=pl.read_parquet("data/silver/5m_canonical.parquet")
-    source_1m=pl.read_parquet("data/bronze/validated_1m.parquet")
+    source=pl.read_parquet("data/bronze/validated_1m.parquet")
 
     df=add_candle_geometry_features(df5)
     df=add_time_features(df)
@@ -34,11 +34,13 @@ def run():
     df=add_support_resistance_features(df,int(cfg["support_resistance_lookback"]))
     df=add_market_structure_features(df)
     df=add_opening_range_features(df,tuple(cfg["opening_range_windows"]))
-    df=add_1m_inside_5m_features(source_1m,df)
+    df=add_1m_inside_5m_features(source,df)
     df=add_event_sampling_features(df,float(cfg["cusum_threshold_multiple"]))
 
-    # Experimental transforms are opt-in. They are never part of the baseline
-    # feature set unless the experiment configuration explicitly enables them.
+    if bool(cfg.get("enable_vwap",False)):
+        from src.features.session_vwap import add_session_vwap
+        df=add_session_vwap(df)
+
     if bool(cfg.get("enable_fractional_diff",False)):
         from src.features.fractional_diff import add_fractional_diff_feature
         df=add_fractional_diff_feature(
