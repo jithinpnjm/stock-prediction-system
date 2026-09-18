@@ -127,18 +127,7 @@ def run(model_family: str = "tcn"):
     folds = list(split.split(batch.timestamps, batch.event_end))
     if not folds:
         raise RuntimeError("no valid sequence validation split")
-    train_idx, val_idx = folds[-1]
-    if len(train_idx) < int(cfg.get("min_train_rows", 500)):
-        raise ValueError("sequence train fold is too small")
-
-    # Standardize per feature, fit on the training fold only, so raw
-    # price-level features (e.g. ATR, path high/low) don't blow up
-    # the network's activations/loss the way they can for tree models.
     n_features = batch.X.shape[2]
-    scaler = StandardScaler().fit(batch.X[train_idx].reshape(-1, n_features))
-    scaled_X = (
-        scaler.transform(batch.X.reshape(-1, n_features)).reshape(batch.X.shape).astype(np.float32)
-    )
 
     mlflow.set_experiment("BankNifty_Sequence_Models")
     with mlflow.start_run(run_name=f"{model_family}_full_5y"):
@@ -156,71 +145,106 @@ def run(model_family: str = "tcn"):
                 "n_features": n_features,
                 "sequence_length": int(cfg["sequence_length"]),
                 "n_sequences": batch.X.shape[0],
-                "n_train": len(train_idx),
-                "n_val": len(val_idx),
+                "n_folds_configured": int(cfg.get("n_splits", 4)),
             }
         )
-
-        if model_family == "tcn":
-            model = build_tcn(n_features)
-            train_X = scaled_X.transpose(0, 2, 1)
-            result = train_sequence_classifier(
-                model,
-                train_X[train_idx],
-                batch.y[train_idx],
-                train_X[val_idx],
-                batch.y[val_idx],
-                epochs=int(cfg["epochs"]),
-                batch_size=int(cfg["batch_size"]),
-                learning_rate=float(cfg["learning_rate"]),
-                patience=int(cfg["patience"]),
-                device=None if cfg.get("device", "auto") == "auto" else cfg["device"],
-            )
-            probs = sequence_predict_proba(result.model, train_X[val_idx])
-        elif model_family == "transformer":
-            model = build_transformer(n_features)
-            result = train_sequence_classifier(
-                model,
-                scaled_X[train_idx],
-                batch.y[train_idx],
-                scaled_X[val_idx],
-                batch.y[val_idx],
-                epochs=int(cfg["epochs"]),
-                batch_size=int(cfg["batch_size"]),
-                learning_rate=float(cfg["learning_rate"]),
-                patience=int(cfg["patience"]),
-                device=None if cfg.get("device", "auto") == "auto" else cfg["device"],
-            )
-            probs = sequence_predict_proba(result.model, scaled_X[val_idx])
-        else:
-            raise ValueError("model_family must be tcn or transformer")
-
         device_used = "cuda" if torch.cuda.is_available() else "cpu"
-        mlflow.log_metric("best_epoch", result.best_epoch)
-        mlflow.log_metric("train_loss", result.train_loss)
-        mlflow.log_metric("val_loss", result.val_loss)
         mlflow.log_param("device", device_used)
-        print(
-            f"{model_family}: epoch={result.best_epoch} "
-            f"train_loss={result.train_loss:.5f} val_loss={result.val_loss:.5f} "
-            f"device={device_used} n_sequences={batch.X.shape[0]} n_features={n_features}"
+
+        rows = []
+        n_folds_used = 0
+        for fold_num, (train_idx, val_idx) in enumerate(folds, 1):
+            if len(train_idx) < int(cfg.get("min_train_rows", 500)):
+                continue
+            n_folds_used += 1
+
+            # Standardize per feature, fit on this fold's training
+            # split only, so raw-scale features don't blow up the
+            # network's activations/loss the way they can for tree
+            # models -- and so no information from a later fold's
+            # validation period leaks into an earlier fold's scaling.
+            scaler = StandardScaler().fit(batch.X[train_idx].reshape(-1, n_features))
+            scaled_X = (
+                scaler.transform(batch.X.reshape(-1, n_features))
+                .reshape(batch.X.shape)
+                .astype(np.float32)
+            )
+
+            if model_family == "tcn":
+                model = build_tcn(n_features)
+                train_X = scaled_X.transpose(0, 2, 1)
+                result = train_sequence_classifier(
+                    model,
+                    train_X[train_idx],
+                    batch.y[train_idx],
+                    train_X[val_idx],
+                    batch.y[val_idx],
+                    epochs=int(cfg["epochs"]),
+                    batch_size=int(cfg["batch_size"]),
+                    learning_rate=float(cfg["learning_rate"]),
+                    patience=int(cfg["patience"]),
+                    device=None if cfg.get("device", "auto") == "auto" else cfg["device"],
+                )
+                probs = sequence_predict_proba(result.model, train_X[val_idx])
+            elif model_family == "transformer":
+                model = build_transformer(n_features)
+                result = train_sequence_classifier(
+                    model,
+                    scaled_X[train_idx],
+                    batch.y[train_idx],
+                    scaled_X[val_idx],
+                    batch.y[val_idx],
+                    epochs=int(cfg["epochs"]),
+                    batch_size=int(cfg["batch_size"]),
+                    learning_rate=float(cfg["learning_rate"]),
+                    patience=int(cfg["patience"]),
+                    device=None if cfg.get("device", "auto") == "auto" else cfg["device"],
+                )
+                probs = sequence_predict_proba(result.model, scaled_X[val_idx])
+            else:
+                raise ValueError("model_family must be tcn or transformer")
+
+            mlflow.log_metric(f"fold_{fold_num}_train_loss", result.train_loss)
+            mlflow.log_metric(f"fold_{fold_num}_val_loss", result.val_loss)
+            print(
+                f"{model_family} fold={fold_num} epoch={result.best_epoch} "
+                f"train_loss={result.train_loss:.5f} val_loss={result.val_loss:.5f} "
+                f"n_train={len(train_idx)} n_val={len(val_idx)}"
+            )
+            for idx, row in zip(val_idx, probs):
+                rows.append(
+                    {
+                        "timestamp": int(batch.timestamps[idx]),
+                        "event_end_timestamp": int(batch.event_end[idx]),
+                        "p_short": float(row[0]),
+                        "p_none": float(row[1]),
+                        "p_long": float(row[2]),
+                        "label": int(batch.y[idx]),
+                        "fold": fold_num,
+                    }
+                )
+
+        if not rows:
+            raise RuntimeError("no valid sequence folds were produced")
+        mlflow.log_metric("n_folds_used", n_folds_used)
+        out = (
+            pl.DataFrame(rows)
+            .with_columns(
+                pl.col("timestamp").cast(pl.Datetime("ns")).dt.replace_time_zone("Asia/Kolkata"),
+                pl.col("event_end_timestamp")
+                .cast(pl.Datetime("ns"))
+                .dt.replace_time_zone("Asia/Kolkata"),
+            )
+            .sort("timestamp")
         )
-        out = pl.DataFrame(
-            {
-                "timestamp": pl.from_numpy(batch.timestamps[val_idx]).cast(
-                    pl.Datetime("ns", time_zone="Asia/Kolkata")
-                ),
-                "event_end_timestamp": pl.from_numpy(batch.event_end[val_idx]).cast(
-                    pl.Datetime("ns", time_zone="Asia/Kolkata")
-                ),
-                "p_short": probs[:, 0],
-                "p_none": probs[:, 1],
-                "p_long": probs[:, 2],
-                "label": batch.y[val_idx],
-            }
-        )
+        mlflow.log_metric("n_oof", out.height)
         mlflow.log_metric("max_p_long", float(out["p_long"].max()))
         mlflow.log_metric("max_p_short", float(out["p_short"].max()))
+        print(
+            f"{model_family}: folds_used={n_folds_used} n_oof={out.height} "
+            f"max_p_long={out['p_long'].max():.3f} max_p_short={out['p_short'].max():.3f} "
+            f"device={device_used}"
+        )
         Path("data/predictions").mkdir(parents=True, exist_ok=True)
         out.write_parquet(f"data/predictions/{model_family}_oof.parquet")
 
