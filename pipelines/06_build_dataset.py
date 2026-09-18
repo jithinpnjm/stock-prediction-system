@@ -68,8 +68,7 @@ def run():
             },
             indent=2,
         )
-        + "
-"
+        + "\n"
     )
     print(
         f"trainable rows={usable.height}, "
