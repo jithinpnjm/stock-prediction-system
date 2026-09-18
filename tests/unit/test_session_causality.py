@@ -42,18 +42,12 @@ def test_clusters_reset_at_session_boundary():
 
 
 def test_volatility_resets_at_session_boundary():
-    out = add_volatility_features(
-        _two_sessions(),
-        atr_periods=(2,),
-        return_periods=(1,),
-    )
-    assert out["atr_2"][2] is None
-    assert out["return_1"][2] is None
+    out = add_volatility_features(_two_sessions(), periods=(2,))
+    assert out["f_atr_2"][2] is None
+    assert out["f_abs_return_2"][2] is None
 
 
 def test_cusum_resets_at_session_boundary():
-    df = _two_sessions().with_columns(
-        pl.Series("atr_14", [1.0, 1.0, 1.0, 1.0])
-    )
+    df = _two_sessions().with_columns(pl.Series("atr_14", [1.0, 1.0, 1.0, 1.0]))
     out = add_cusum_events(df, threshold_atr=100.0)
     assert out["cusum_event"].to_list()[2] == 0

@@ -35,11 +35,12 @@ def build_trade_decisions(
             pl.Series("ev_long_points", ev_long),
             pl.Series("ev_short_points", ev_short),
             pl.Series("raw_signal", signal),
-            pl.when((pl.col("raw_signal") == 1) & (pl.col("ev_long_points") > 0))
-            .then(1)
-            .when((pl.col("raw_signal") == -1) & (pl.col("ev_short_points") > 0))
-            .then(-1)
-            .otherwise(0)
-            .alias("signal"),
         ]
+    ).with_columns(
+        pl.when((pl.col("raw_signal") == 1) & (pl.col("ev_long_points") > 0))
+        .then(1)
+        .when((pl.col("raw_signal") == -1) & (pl.col("ev_short_points") > 0))
+        .then(-1)
+        .otherwise(0)
+        .alias("signal"),
     )
