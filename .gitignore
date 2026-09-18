@@ -5,37 +5,45 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
 
 # Environment and secrets
 .env
 .env.*
 !.env.example
+secrets/*
+!secrets/fyers_auth.example.json
 *.pem
 *.key
 *credentials*
 *credential*
-*secret*
 *token*
-*auth*
 
-# DVC / ML artifacts
-.dvc/cache/
-.mlflow/
+# Generated experiment artifacts
+mlflow.db
 mlruns/
-*.model
-*.pkl
-*.pickle
-*.joblib
-
-# Local data and generated artifacts
-logs/
+models/
 artifacts/
 outputs/
+logs/
+reports/*.png
+reports/*.html
+
+# DVC cache
+.dvc/cache/
+
+# Generated datasets; use DVC pointers for durable versions
+data/bronze/*.parquet
+data/silver/*.parquet
+data/gold/*.parquet
+data/ml/*.parquet
+data/predictions/*.parquet
+data/backtest/*.parquet
+data/raw/fyers/*.parquet
+data/raw/fyers/no_data_days.json
 
 # IDE / OS
 .idea/
 .vscode/
 .DS_Store
-
-
 *.log
