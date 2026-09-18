@@ -19,6 +19,7 @@ def _label_path(
 ):
     n = len(start_idx)
     labels = np.zeros(n, dtype=np.int8)
+    outcome_codes = np.zeros(n, dtype=np.int8)
     hit_idx = np.full(n, -1, dtype=np.int64)
     mfe_l = np.zeros(n)
     mae_l = np.zeros(n)
@@ -27,60 +28,92 @@ def _label_path(
 
     for i in range(n):
         entry = entry_prices[i]
-        lt = entry + target_pts
-        ls = entry - stop_pts
-        st = entry - target_pts
-        ss = entry + stop_pts
-        lti = lsi = sti = ssi = -1
-        ml = al = ms = ass = 0.0
+        long_target = entry + target_pts
+        long_stop = entry - stop_pts
+        short_target = entry - target_pts
+        short_stop = entry + stop_pts
+
+        long_target_idx = -1
+        long_stop_idx = -1
+        short_target_idx = -1
+        short_stop_idx = -1
+        ambiguous_idx = -1
+
+        mfe_long = 0.0
+        mae_long = 0.0
+        mfe_short = 0.0
+        mae_short = 0.0
 
         for j in range(start_idx[i], end_idx[i]):
             up = high[j] - entry
             down = entry - low[j]
-            ml = max(ml, up)
-            al = max(al, down)
-            ms = max(ms, down)
-            ass = max(ass, up)
+            mfe_long = max(mfe_long, up)
+            mae_long = max(mae_long, down)
+            mfe_short = max(mfe_short, down)
+            mae_short = max(mae_short, up)
 
-            if lti == -1 and lsi == -1:
-                if high[j] >= lt and low[j] <= ls:
-                    lsi = j
-                elif high[j] >= lt:
-                    lti = j
-                elif low[j] <= ls:
-                    lsi = j
+            if long_target_idx == -1 and long_stop_idx == -1:
+                if high[j] >= long_target and low[j] <= long_stop:
+                    long_stop_idx = j
+                    ambiguous_idx = j if ambiguous_idx == -1 else ambiguous_idx
+                elif high[j] >= long_target:
+                    long_target_idx = j
+                elif low[j] <= long_stop:
+                    long_stop_idx = j
 
-            if sti == -1 and ssi == -1:
-                if low[j] <= st and high[j] >= ss:
-                    ssi = j
-                elif low[j] <= st:
-                    sti = j
-                elif high[j] >= ss:
-                    ssi = j
+            if short_target_idx == -1 and short_stop_idx == -1:
+                if low[j] <= short_target and high[j] >= short_stop:
+                    short_stop_idx = j
+                    ambiguous_idx = j if ambiguous_idx == -1 else ambiguous_idx
+                elif low[j] <= short_target:
+                    short_target_idx = j
+                elif high[j] >= short_stop:
+                    short_stop_idx = j
 
-        long_valid = lti != -1 and (lsi == -1 or lti < lsi)
-        short_valid = sti != -1 and (ssi == -1 or sti < ssi)
+        long_valid = (
+            long_target_idx != -1
+            and (long_stop_idx == -1 or long_target_idx < long_stop_idx)
+        )
+        short_valid = (
+            short_target_idx != -1
+            and (short_stop_idx == -1 or short_target_idx < short_stop_idx)
+        )
 
         if long_valid and short_valid:
-            if lti <= sti:
+            if long_target_idx <= short_target_idx:
                 labels[i] = 1
-                hit_idx[i] = lti
+                outcome_codes[i] = 1
+                hit_idx[i] = long_target_idx
             else:
                 labels[i] = -1
-                hit_idx[i] = sti
+                outcome_codes[i] = -1
+                hit_idx[i] = short_target_idx
         elif long_valid:
             labels[i] = 1
-            hit_idx[i] = lti
+            outcome_codes[i] = 1
+            hit_idx[i] = long_target_idx
         elif short_valid:
             labels[i] = -1
-            hit_idx[i] = sti
+            outcome_codes[i] = -1
+            hit_idx[i] = short_target_idx
+        elif ambiguous_idx != -1:
+            outcome_codes[i] = 2
+            hit_idx[i] = ambiguous_idx
 
-        mfe_l[i] = ml
-        mae_l[i] = al
-        mfe_s[i] = ms
-        mae_s[i] = ass
+        mfe_l[i] = mfe_long
+        mae_l[i] = mae_long
+        mfe_s[i] = mfe_short
+        mae_s[i] = mae_short
 
-    return labels, hit_idx, mfe_l, mae_l, mfe_s, mae_s
+    return (
+        labels,
+        outcome_codes,
+        hit_idx,
+        mfe_l,
+        mae_l,
+        mfe_s,
+        mae_s,
+    )
 
 
 def apply_triple_barrier_labels(
@@ -112,13 +145,13 @@ def apply_triple_barrier_labels(
     horizon_ns = np.int64(max_horizon_minutes) * 60 * 1_000_000_000
 
     for i, ts in enumerate(e_ts):
-        j = int(starts[i])
-        end = int(np.searchsorted(b_ts, ts + horizon_ns, side="right"))
-        while end > j and b_dates[end - 1] != e_dates[i]:
-            end -= 1
-        ends[i] = end
+        start_idx = int(starts[i])
+        end_idx = int(np.searchsorted(b_ts, ts + horizon_ns, side="right"))
+        while end_idx > start_idx and b_dates[end_idx - 1] != e_dates[i]:
+            end_idx -= 1
+        ends[i] = end_idx
 
-    usable = (starts >= 0) & (ends > starts)
+    usable = ends > starts
     if not np.any(usable):
         raise ValueError("No events have a usable future source path")
 
@@ -129,6 +162,7 @@ def apply_triple_barrier_labels(
 
     (
         labels,
+        outcome_codes,
         hit_idx,
         mfe_l,
         mae_l,
@@ -145,23 +179,42 @@ def apply_triple_barrier_labels(
     )
 
     expiry_idx = ends - 1
-    barrier_idx = np.where(hit_idx >= 0, hit_idx, expiry_idx)
-
     ns_dtype = pl.Datetime("ns", time_zone="Asia/Kolkata")
-    expiry = pl.Series(
+
+    event_end = pl.Series(
         "event_end_timestamp",
         b_ts[expiry_idx],
     ).cast(ns_dtype)
-    barrier = pl.Series(
-        "barrier_timestamp",
-        b_ts[barrier_idx],
-    ).cast(ns_dtype)
+
+    barrier_values = np.full(len(labels), 0, dtype=np.int64)
+    hit_mask = outcome_codes != 0
+    barrier_values[hit_mask] = b_ts[hit_idx[hit_mask]]
+    barrier = pl.Series("barrier_timestamp", barrier_values).cast(ns_dtype)
+    barrier = barrier.set_at_idx(
+        pl.Series(np.flatnonzero(~hit_mask)),
+        None,
+    )
+
+    barrier_type = np.select(
+        [
+            outcome_codes == 1,
+            outcome_codes == -1,
+            outcome_codes == 2,
+        ],
+        [
+            "target_long",
+            "target_short",
+            "ambiguous",
+        ],
+        default="no_target",
+    )
 
     result = events.with_columns(
         pl.Series("entry_price", e_close),
         pl.Series("label", labels, dtype=pl.Int8),
-        expiry,
+        event_end,
         barrier,
+        pl.Series("barrier_type", barrier_type),
         pl.Series("mfe_long_points", mfe_l),
         pl.Series("mae_long_points", mae_l),
         pl.Series("mfe_short_points", mfe_s),
@@ -189,5 +242,8 @@ def apply_triple_barrier_labels(
         )
 
     from .mfe_mae import add_excursion_features
+    from .timing import add_label_timing
 
-    return add_excursion_features(result)
+    result = add_excursion_features(result)
+    result = add_label_timing(result, "barrier_timestamp")
+    return result
