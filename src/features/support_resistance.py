@@ -24,8 +24,6 @@ def add_support_resistance_features(
         .over("_session_date")
     )
     return out.with_columns(
-        resistance.alias("f_resistance"),
-        support.alias("f_support"),
         (pl.col("close") - resistance).alias("f_distance_to_resistance"),
         (pl.col("close") - support).alias("f_distance_to_support"),
         r_touch.alias("f_resistance_touches"),

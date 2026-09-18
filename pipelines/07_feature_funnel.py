@@ -83,8 +83,8 @@ FUNNEL_STAGES: list[tuple[str, list[str]]] = [
             "f_breakout_above_prior_high",
             "f_breakdown_below_prior_low",
             "f_structure_return",
-            "f_last_swing_high",
-            "f_last_swing_low",
+            "f_distance_to_last_swing_high",
+            "f_distance_to_last_swing_low",
             "f_higher_high",
             "f_lower_high",
             "f_higher_low",
@@ -101,8 +101,6 @@ FUNNEL_STAGES: list[tuple[str, list[str]]] = [
     (
         "support_resistance",
         [
-            "f_resistance",
-            "f_support",
             "f_distance_to_resistance",
             "f_distance_to_support",
             "f_resistance_touches",
@@ -129,8 +127,6 @@ FUNNEL_STAGES: list[tuple[str, list[str]]] = [
             "f_prev_day_range_position",
             "f_prev_day_return",
             "f_prev_day_range",
-            "f_session_high_so_far",
-            "f_session_low_so_far",
             "f_intraday_high_pullback",
             "f_intraday_low_rebound",
             "f_or3_range",
@@ -154,8 +150,6 @@ FUNNEL_STAGES: list[tuple[str, list[str]]] = [
     (
         "microstructure_1m",
         [
-            "f_1m_path_high",
-            "f_1m_path_low",
             "f_1m_path_volume",
             "f_1m_range_sum",
             "f_1m_range_mean",

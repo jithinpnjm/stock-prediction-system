@@ -26,8 +26,8 @@ def add_1m_inside_5m_features(
     summary = (
         one.group_by("timestamp")
         .agg(
-            pl.col("high").max().alias("f_1m_path_high"),
-            pl.col("low").min().alias("f_1m_path_low"),
+            pl.col("high").max().alias("_1m_path_high"),
+            pl.col("low").min().alias("_1m_path_low"),
             pl.col("open").first().alias("_first_1m_open"),
             pl.col("close").last().alias("_last_1m_close"),
             pl.col("volume").sum().alias("f_1m_path_volume"),
@@ -40,11 +40,11 @@ def add_1m_inside_5m_features(
         )
         .with_columns(
             (pl.col("_last_1m_close") - pl.col("_first_1m_open")).alias("f_1m_path_net_move"),
-            (pl.col("f_1m_path_high") - pl.col("f_1m_path_low")).alias("f_1m_path_range"),
-            (pl.col("f_1m_path_high") - pl.col("_last_1m_close")).alias("f_1m_path_high_rejection"),
-            (pl.col("_last_1m_close") - pl.col("f_1m_path_low")).alias("f_1m_path_low_rebound"),
+            (pl.col("_1m_path_high") - pl.col("_1m_path_low")).alias("f_1m_path_range"),
+            (pl.col("_1m_path_high") - pl.col("_last_1m_close")).alias("f_1m_path_high_rejection"),
+            (pl.col("_last_1m_close") - pl.col("_1m_path_low")).alias("f_1m_path_low_rebound"),
             (pl.col("f_1m_up_count") / (pl.col("f_1m_count") + 1e-9)).alias("f_1m_up_ratio"),
         )
-        .drop(["_first_1m_open", "_last_1m_close"])
+        .drop(["_first_1m_open", "_last_1m_close", "_1m_path_high", "_1m_path_low"])
     )
     return five.join(summary, on="timestamp", how="left")
