@@ -36,3 +36,9 @@ outputs/
 .idea/
 .vscode/
 .DS_Store
+
+data/
+models/
+mlflow.db
+*.log
+

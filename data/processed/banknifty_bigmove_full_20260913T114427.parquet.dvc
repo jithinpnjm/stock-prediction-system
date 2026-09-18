@@ -1,5 +1,0 @@
-outs:
-- md5: 8a611e4fe94688c5037a98d974c3ccb4
-  size: 12313372
-  hash: md5
-  path: banknifty_bigmove_full_20260913T114427.parquet

@@ -1,0 +1,5 @@
+[core]
+    remote = nebius
+['remote "nebius"']
+    url = ssh://jithin@89.169.99.54/mnt/shared/dvc-store
+    keyfile = /Users/jithinpjoseph/.ssh/nvidia-lab
