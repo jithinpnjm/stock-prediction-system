@@ -7,48 +7,24 @@ def add_1m_inside_5m_features(
     df_1m: pl.DataFrame,
     df_5m: pl.DataFrame,
 ) -> pl.DataFrame:
+    # Each 1m row belongs to exactly one 5m bucket (the bucket whose
+    # close timestamp it is <= to, within the preceding 5 minutes).
+    # Compute that bucket's close timestamp directly instead of joining
+    # every 5m row against every 1m row of the same calendar date and
+    # filtering afterwards -- that cross join is O(75 x 375) per day
+    # and runs out of memory over multi-year datasets.
+    bucket_close = (pl.col("timestamp") - pl.duration(minutes=1)).dt.truncate("5m") + pl.duration(
+        minutes=5
+    )
     one = df_1m.sort("timestamp").with_columns(
-        pl.col("timestamp").dt.date().alias("_date"),
-        (
-            pl.col("timestamp").dt.hour().cast(pl.Int32) * 60
-            + pl.col("timestamp").dt.minute().cast(pl.Int32)
-        ).alias("_minute"),
+        bucket_close.alias("timestamp"),
         (pl.col("close") > pl.col("open")).cast(pl.Int8).alias("_up"),
         (pl.col("close") < pl.col("open")).cast(pl.Int8).alias("_down"),
         (pl.col("high") - pl.col("low")).alias("_range"),
     )
-    five = df_5m.sort("timestamp").with_columns(
-        pl.col("timestamp").dt.date().alias("_date"),
-        (
-            pl.col("timestamp").dt.hour().cast(pl.Int32) * 60
-            + pl.col("timestamp").dt.minute().cast(pl.Int32)
-        ).alias("_close_minute"),
-    )
+    five = df_5m.sort("timestamp")
     summary = (
-        five.join(
-            one.select(
-                [
-                    "timestamp",
-                    "open",
-                    "high",
-                    "low",
-                    "close",
-                    "volume",
-                    "_date",
-                    "_minute",
-                    "_up",
-                    "_down",
-                    "_range",
-                ]
-            ),
-            on="_date",
-            how="left",
-        )
-        .filter(
-            (pl.col("_minute") <= pl.col("_close_minute"))
-            & (pl.col("_minute") > pl.col("_close_minute") - 5)
-        )
-        .group_by("timestamp")
+        one.group_by("timestamp")
         .agg(
             pl.col("high").max().alias("f_1m_path_high"),
             pl.col("low").min().alias("f_1m_path_low"),
@@ -71,4 +47,4 @@ def add_1m_inside_5m_features(
         )
         .drop(["_first_1m_open", "_last_1m_close"])
     )
-    return five.join(summary, on="timestamp", how="left").drop(["_date", "_close_minute"])
+    return five.join(summary, on="timestamp", how="left")
