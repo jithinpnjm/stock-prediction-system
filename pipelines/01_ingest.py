@@ -11,31 +11,24 @@ from src.data.ingest import load_source, write_bronze
 
 
 def discover_sources(config: dict) -> list[str]:
-    pattern = config["source"]["raw_glob"]
-    sources = sorted(glob.glob(pattern))
+    sources = sorted(glob.glob(config["source"]["raw_glob"]))
     if sources:
         return sources
     for fallback in config["ingestion"].get("allow_legacy_files", []):
         if Path(fallback).exists():
             return [fallback]
-    raise FileNotFoundError(
-        f"No raw sources found for {pattern} or configured legacy paths"
-    )
+    raise FileNotFoundError("No configured raw data source was found")
 
 
 def run() -> None:
     config = load_yaml(os.getenv("DATA_CONFIG", "configs/data/banknifty.yaml"))
     sources = discover_sources(config)
     frames = [load_source(p, input_timezone=config["source"]["timezone"]) for p in sources]
-
-    df = (
-        pl.concat(frames, how="diagonal_relaxed")
-        .sort("timestamp")
-        .unique(subset=["timestamp"], keep="last", maintain_order=True)
-    )
-    bronze = config["ingestion"]["bronze_path"]
-    write_bronze(df, bronze)
-    print(f"Ingested {len(sources)} source file(s), {df.height} canonical 1m rows -> {bronze}")
+    df = pl.concat(frames, how="diagonal_relaxed").sort("timestamp")
+    if df.get_column("timestamp").n_unique() != df.height:
+        raise ValueError("Duplicate timestamps found during ingestion; source data was not silently deduplicated")
+    write_bronze(df, config["ingestion"]["bronze_path"])
+    print(f"Ingested {len(sources)} source file(s), {df.height} canonical 1m rows")
 
 
 if __name__ == "__main__":
