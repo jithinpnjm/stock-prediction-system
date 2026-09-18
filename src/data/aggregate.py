@@ -17,10 +17,15 @@ def aggregate_1m_to_5m(
     df = calendar.filter_session(df_1m).sort("timestamp")
     local = pl.col("timestamp").dt.convert_time_zone(calendar.timezone)
 
-    # Canonical 1m availability timestamps are 09:16..15:30.
-    # Five-minute buckets are aligned to the NSE 09:15 session boundary and
-    # represented by their closing availability timestamp.
-    bucket_close = local.dt.truncate("5m") + pl.duration(minutes=5)
+    # Canonical 1m availability timestamps are 09:16..15:30. Polars'
+    # generic 5-minute truncation is epoch-aligned, not NSE-session-aligned,
+    # so shift by the 09:15 session offset before truncating. This makes
+    # 09:16..09:20 -> 09:20 and 09:21..09:25 -> 09:25.
+    bucket_close = (
+        (local - pl.duration(minutes=15))
+        .dt.truncate("5m")
+        + pl.duration(minutes=20)
+    )
 
     df = df.with_columns(
         bucket_close.alias("_bucket_close"),
