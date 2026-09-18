@@ -186,14 +186,16 @@ def apply_triple_barrier_labels(
         b_ts[expiry_idx],
     ).cast(ns_dtype)
 
-    barrier_values = np.full(len(labels), 0, dtype=np.int64)
     hit_mask = outcome_codes != 0
-    barrier_values[hit_mask] = b_ts[hit_idx[hit_mask]]
-    barrier = pl.Series("barrier_timestamp", barrier_values).cast(ns_dtype)
-    barrier = barrier.set_at_idx(
-        pl.Series(np.flatnonzero(~hit_mask)),
-        None,
-    )
+    barrier_values = [
+        int(b_ts[idx]) if hit else None
+        for idx, hit in zip(hit_idx, hit_mask, strict=False)
+    ]
+    barrier = pl.Series(
+        "barrier_timestamp",
+        barrier_values,
+        dtype=pl.Int64,
+    ).cast(ns_dtype)
 
     barrier_type = np.select(
         [
