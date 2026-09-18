@@ -7,6 +7,16 @@ import polars as pl
 import yaml
 
 
+def load_excluded_dates(
+    config_path: str | Path = "configs/data/excluded_sessions.yaml",
+) -> set[date]:
+    """Dates dropped by apply_known_exclusions. Data-quality validation
+    must treat these the same as holidays (i.e. not expect data on
+    them), or every re-ingestion will flag them as missing sessions."""
+    payload = yaml.safe_load(Path(config_path).read_text()) or {}
+    return {date.fromisoformat(item["date"]) for item in payload.get("excluded_dates", [])}
+
+
 def apply_known_exclusions(
     df: pl.DataFrame,
     config_path: str | Path = "configs/data/excluded_sessions.yaml",
@@ -17,9 +27,7 @@ def apply_known_exclusions(
     payload = yaml.safe_load(Path(config_path).read_text()) or {}
     out = df
 
-    excluded_dates = {
-        date.fromisoformat(item["date"]) for item in payload.get("excluded_dates", [])
-    }
+    excluded_dates = load_excluded_dates(config_path)
     if excluded_dates:
         out = out.filter(~pl.col("source_timestamp").dt.date().is_in(excluded_dates))
 
