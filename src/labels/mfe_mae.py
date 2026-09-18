@@ -6,11 +6,13 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import polars as pl
 
-from src.common.contracts import MARKET_TIMEZONE, SESSION_CLOSE, LabelConfig
+from src.common.contracts import MARKET_TIMEZONE, SESSION_CLOSE
+
+IST = ZoneInfo(MARKET_TIMEZONE)
 
 
 def _session_close(ts: datetime) -> datetime:
-    local = ts.astimezone(ZoneInfo(MARKET_TIMEZONE))
+    local = ts.astimezone(IST)
     return local.replace(
         hour=SESSION_CLOSE.hour,
         minute=SESSION_CLOSE.minute,
@@ -30,8 +32,9 @@ def compute_mfe_mae(
         raise ValueError("direction must be -1 or 1")
 
     event_ts = events.get_column("timestamp").to_list()
+    entry_prices = events.get_column("close").to_numpy()
     prices = one_minute.sort("timestamp")
-    ts = np.array(prices.get_column("timestamp").to_list(), dtype=object)
+    ts = np.asarray(prices.get_column("timestamp").to_list(), dtype=object)
     highs = prices.get_column("high").to_numpy()
     lows = prices.get_column("low").to_numpy()
 
@@ -45,28 +48,30 @@ def compute_mfe_mae(
             start + timedelta(minutes=5 * horizon_bars),
             _session_close(start),
         )
-        left = int(np.searchsorted(ts, start, side="right"))
+        left = int(np.searchsorted(ts, start, side="left"))
         right = int(np.searchsorted(ts, expiry, side="right"))
         if right <= left:
             continue
         h = highs[left:right]
         l = lows[left:right]
+        entry = float(entry_prices[i])
         if direction == 1:
-            favorable = h - float(events["close"][i])
-            adverse = float(events["close"][i]) - l
+            favorable = h - entry
+            adverse = entry - l
         else:
-            favorable = float(events["close"][i]) - l
-            adverse = h - float(events["close"][i])
+            favorable = entry - l
+            adverse = h - entry
         mfe[i] = max(0.0, float(np.nanmax(favorable)))
         mae[i] = max(0.0, float(np.nanmax(adverse)))
         mfe_time[i] = ts[left + int(np.nanargmax(favorable))]
         mae_time[i] = ts[left + int(np.nanargmax(adverse))]
 
+    suffix = "long" if direction == 1 else "short"
     return events.with_columns(
         [
-            pl.Series(f"mfe_{'long' if direction == 1 else 'short'}", mfe),
-            pl.Series(f"mae_{'long' if direction == 1 else 'short'}", mae),
-            pl.Series(f"mfe_time_{'long' if direction == 1 else 'short'}", mfe_time),
-            pl.Series(f"mae_time_{'long' if direction == 1 else 'short'}", mae_time),
+            pl.Series(f"mfe_{suffix}", mfe),
+            pl.Series(f"mae_{suffix}", mae),
+            pl.Series(f"mfe_time_{suffix}", mfe_time),
+            pl.Series(f"mae_time_{suffix}", mae_time),
         ]
     )

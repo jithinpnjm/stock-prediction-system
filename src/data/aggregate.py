@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from datetime import timedelta
-
 import polars as pl
 
 from src.common.contracts import MARKET_TIMEZONE, SESSION_OPEN
-from src.data.calendar import expected_5m_close_timestamps
 
 
 def aggregate_1m_to_5m(
@@ -16,9 +13,9 @@ def aggregate_1m_to_5m(
     if df_1m.is_empty():
         raise ValueError("Cannot aggregate empty 1m data")
 
-    # 1m timestamps are bar-start timestamps. Buckets are anchored to the
-    # 09:15 session open and the 5m output timestamp is the bucket close.
-    minute_of_day = pl.col("timestamp").dt.hour() * 60 + pl.col("timestamp").dt.minute()
+    minute_of_day = (
+        pl.col("timestamp").dt.hour() * 60 + pl.col("timestamp").dt.minute()
+    )
     session_open_minutes = SESSION_OPEN.hour * 60 + SESSION_OPEN.minute
     bucket_index = (
         ((minute_of_day - session_open_minutes) / 5.0)
@@ -48,7 +45,9 @@ def aggregate_1m_to_5m(
         )
         .with_columns(
             (
-                pl.col("session_date").cast(pl.Datetime(time_zone=MARKET_TIMEZONE))
+                pl.col("session_date").cast(
+                    pl.Datetime(time_zone=MARKET_TIMEZONE)
+                )
                 + pl.duration(minutes=session_open_minutes)
                 + pl.duration(minutes=5) * (pl.col("_bucket_index") + 1)
             ).alias("timestamp")
@@ -78,6 +77,7 @@ def aggregate_1m_to_5m(
 def validate_aggregation(df_5m: pl.DataFrame) -> None:
     if df_5m.is_empty():
         raise ValueError("5m dataset is empty")
+
     invalid = df_5m.filter(
         (pl.col("high") < pl.col("low"))
         | (pl.col("open") < pl.col("low"))
@@ -88,12 +88,6 @@ def validate_aggregation(df_5m: pl.DataFrame) -> None:
     if invalid.height:
         raise ValueError(f"Invalid 5m OHLC rows: {invalid.height}")
 
-    expected_last = df_5m.group_by("session_date").agg(
-        [
-            pl.len().alias("count"),
-            pl.col("timestamp").max().alias("last_timestamp"),
-        ]
-    )
-    bad_counts = expected_last.filter(pl.col("count") > 75)
-    if bad_counts.height:
-        raise ValueError("5m dataset contains more than 75 buckets in a session")
+    counts = df_5m.group_by("session_date").agg(pl.len().alias("count"))
+    if counts.filter(pl.col("count") != 75).height:
+        raise ValueError("Each validated 5m session must contain exactly 75 bars")

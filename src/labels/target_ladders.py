@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 import polars as pl
 
 from src.common.contracts import LabelConfig
@@ -20,12 +18,10 @@ def build_target_ladder(
         target: apply_triple_barrier_labels(
             events,
             one_minute,
-            replace(
-                LabelConfig(
-                    target_points=target,
-                    stop_points=stop_points,
-                    horizon_bars=horizon_bars,
-                )
+            LabelConfig(
+                target_points=target,
+                stop_points=stop_points,
+                horizon_bars=horizon_bars,
             ),
         )
         for target in targets

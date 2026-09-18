@@ -5,6 +5,10 @@ import os
 import polars as pl
 
 from src.common.config import load_yaml
+from src.features.catalog import (
+    assert_feature_frame_is_pre_label,
+    assert_known_feature_columns,
+)
 from src.features.engine import build_point_in_time_features
 
 
@@ -12,7 +16,11 @@ def run() -> None:
     data_cfg = load_yaml(os.getenv("DATA_CONFIG", "configs/data/banknifty.yaml"))
     five = pl.read_parquet("data/silver/5m_canonical.parquet")
     one = pl.read_parquet(data_cfg["ingestion"]["bronze_path"])
+
     df = build_point_in_time_features(five, one)
+    assert_feature_frame_is_pre_label(df)
+    assert_known_feature_columns(df)
+
     os.makedirs("data/gold", exist_ok=True)
     df.write_parquet("data/gold/features_v1.parquet", compression="zstd")
     print(f"Feature dataset: {df.height} rows x {df.width} columns")

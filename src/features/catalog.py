@@ -19,7 +19,7 @@ FEATURE_CONTRACTS = (
     FeatureContract("body", "5m", "current bar", "5m close"),
     FeatureContract("upper_wick", "5m", "current bar", "5m close"),
     FeatureContract("lower_wick", "5m", "current bar", "5m close"),
-    FeatureContract("atr_", "5m", "rolling prior/current bars", "5m close"),
+    FeatureContract("atr_", "5m", "rolling current bar", "5m close"),
     FeatureContract("return_", "5m", "past bars", "5m close"),
     FeatureContract("realized_vol_", "5m", "past bars", "5m close"),
     FeatureContract("cluster_", "5m", "current causal cluster", "5m close"),
@@ -47,3 +47,31 @@ def assert_feature_frame_is_pre_label(df: pl.DataFrame) -> None:
     leaked = sorted(forbidden & set(df.columns))
     if leaked:
         raise ValueError(f"Label/outcome columns present in feature frame: {leaked}")
+
+
+def unknown_feature_columns(df: pl.DataFrame) -> list[str]:
+    known = []
+    for column in df.columns:
+        if column in {
+            "session_date",
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "source_1m_count",
+        }:
+            continue
+        if any(column.startswith(c.name_prefix) for c in FEATURE_CONTRACTS):
+            known.append(column)
+    return sorted(set(df.columns) - set(known) - {"session_date", "timestamp"})
+
+
+def assert_known_feature_columns(df: pl.DataFrame) -> None:
+    unknown = unknown_feature_columns(df)
+    if unknown:
+        raise ValueError(
+            "Unregistered feature columns detected; update FEATURE_CONTRACTS: "
+            + ", ".join(unknown)
+        )

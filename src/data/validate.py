@@ -16,9 +16,11 @@ class ValidationReport:
     sessions: int
     duplicate_timestamps: int
     non_monotonic_sessions: int
+    timestamp_gap_count: int
     invalid_geometry: int
     invalid_price_or_volume: int
     out_of_session: int
+    invalid_minute_alignment: int
     missing_session_bars: int
     unexpected_sessions: tuple[date, ...]
 
@@ -28,9 +30,11 @@ class ValidationReport:
             (
                 self.duplicate_timestamps,
                 self.non_monotonic_sessions,
+                self.timestamp_gap_count,
                 self.invalid_geometry,
                 self.invalid_price_or_volume,
                 self.out_of_session,
+                self.invalid_minute_alignment,
                 self.missing_session_bars,
                 self.unexpected_sessions,
             )
@@ -72,17 +76,25 @@ def validate_1m(
             & (pl.col("timestamp").dt.time() < SESSION_CLOSE)
         )
     ).height
+    invalid_minute_alignment = df.filter(
+        (pl.col("timestamp").dt.second() != 0)
+        | (pl.col("timestamp").dt.microsecond() != 0)
+    ).height
 
     non_monotonic_sessions = 0
+    timestamp_gap_count = 0
     missing_session_bars = 0
     unexpected_sessions: list[date] = []
     expected = expected_bars("1m")
 
     for session_df in df.partition_by("session_date", as_dict=False):
         session = session_df.get_column("session_date")[0]
-        ts = session_df.get_column("timestamp").to_list()
+        ts = session_df.sort("timestamp").get_column("timestamp").to_list()
         if any(b <= a for a, b in zip(ts, ts[1:])):
             non_monotonic_sessions += 1
+        timestamp_gap_count += sum(
+            (b - a).total_seconds() != 60 for a, b in zip(ts, ts[1:])
+        )
         if session.weekday() >= 5 or session in holidays:
             unexpected_sessions.append(session)
         elif require_complete_sessions and len(ts) != expected:
@@ -93,9 +105,11 @@ def validate_1m(
         sessions=df.get_column("session_date").n_unique(),
         duplicate_timestamps=duplicate_timestamps,
         non_monotonic_sessions=non_monotonic_sessions,
+        timestamp_gap_count=timestamp_gap_count,
         invalid_geometry=invalid_geometry,
         invalid_price_or_volume=invalid_price_or_volume,
         out_of_session=out_of_session,
+        invalid_minute_alignment=invalid_minute_alignment,
         missing_session_bars=missing_session_bars,
         unexpected_sessions=tuple(sorted(set(unexpected_sessions))),
     )

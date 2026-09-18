@@ -39,19 +39,19 @@ def _first_touch(
         if target_hit and stop_hit:
             return BarrierType.AMBIGUOUS.value, timestamps[j]
         if target_hit:
-            kind = (
+            return (
                 BarrierType.LONG_TARGET.value
                 if target_is_above
-                else BarrierType.SHORT_TARGET.value
+                else BarrierType.SHORT_TARGET.value,
+                timestamps[j],
             )
-            return kind, timestamps[j]
         if stop_hit:
-            kind = (
+            return (
                 BarrierType.LONG_STOP.value
                 if not stop_is_above
-                else BarrierType.SHORT_STOP.value
+                else BarrierType.SHORT_STOP.value,
+                timestamps[j],
             )
-            return kind, timestamps[j]
     return BarrierType.TIME.value, timestamps[-1] if len(timestamps) else None
 
 
@@ -76,7 +76,7 @@ def apply_triple_barrier_labels(
             entry_time + timedelta(minutes=5 * config.horizon_bars),
             _session_close(entry_time),
         )
-        left = int(np.searchsorted(one_ts, entry_time, side="right"))
+        left = int(np.searchsorted(one_ts, entry_time, side="left"))
         right = int(np.searchsorted(one_ts, expiry, side="right"))
 
         if right <= left:
@@ -116,14 +116,21 @@ def apply_triple_barrier_labels(
             stop=entry + config.stop_points,
         )
 
-        ambiguous = long_type == BarrierType.AMBIGUOUS.value or short_type == BarrierType.AMBIGUOUS.value
+        ambiguous = (
+            long_type == BarrierType.AMBIGUOUS.value
+            or short_type == BarrierType.AMBIGUOUS.value
+        )
         long_target = long_type == BarrierType.LONG_TARGET.value
         short_target = short_type == BarrierType.SHORT_TARGET.value
 
         if ambiguous:
             label = 0
             barrier_type = BarrierType.AMBIGUOUS.value
-            barrier_time = long_time if long_type == BarrierType.AMBIGUOUS.value else short_time
+            barrier_time = (
+                long_time
+                if long_type == BarrierType.AMBIGUOUS.value
+                else short_time
+            )
         elif long_target and short_target and long_time == short_time:
             label = 0
             barrier_type = BarrierType.AMBIGUOUS.value
@@ -148,10 +155,22 @@ def apply_triple_barrier_labels(
                 barrier_type = BarrierType.TIME.value
                 barrier_time = long_time or short_time
 
-        long_outcome = 1 if long_target else -1 if long_type == BarrierType.LONG_STOP.value else 0
-        short_outcome = 1 if short_target else -1 if short_type == BarrierType.SHORT_STOP.value else 0
-
+        long_outcome = (
+            1
+            if long_target
+            else -1
+            if long_type == BarrierType.LONG_STOP.value
+            else 0
+        )
+        short_outcome = (
+            1
+            if short_target
+            else -1
+            if short_type == BarrierType.SHORT_STOP.value
+            else 0
+        )
         complete = one_ts[right - 1] >= expiry - timedelta(minutes=1)
+
         results.append(
             {
                 "event_start": start,
