@@ -63,28 +63,31 @@ def apply_triple_barrier_labels(
     config = config or LabelConfig()
     one = one_minute.sort("timestamp")
     one_ts = np.asarray(one.get_column("timestamp").to_list(), dtype=object)
+    one_open = one.get_column("open").to_numpy()
     one_high = one.get_column("high").to_numpy()
     one_low = one.get_column("low").to_numpy()
 
     results: list[dict[str, object]] = []
     event_ts = events.get_column("timestamp").to_list()
-    event_close = events.get_column("close").to_numpy()
 
-    for i, start in enumerate(event_ts):
+    for start in event_ts:
         entry_time = start + timedelta(minutes=config.entry_delay_minutes)
         expiry = min(
             entry_time + timedelta(minutes=5 * config.horizon_bars),
             _session_close(entry_time),
         )
-        left = int(np.searchsorted(one_ts, entry_time, side="left"))
+
+        entry_idx = int(np.searchsorted(one_ts, entry_time, side="left"))
+        left = entry_idx
         right = int(np.searchsorted(one_ts, expiry, side="right"))
 
-        if right <= left:
+        if right <= left or entry_idx >= len(one_ts):
             results.append(
                 {
                     "event_start": start,
                     "event_end": expiry,
                     "entry_time": entry_time,
+                    "entry_price": None,
                     "label": 0,
                     "barrier_type": BarrierType.TIME.value,
                     "barrier_time": None,
@@ -95,10 +98,11 @@ def apply_triple_barrier_labels(
             )
             continue
 
+        entry = float(one_open[entry_idx])
         h = one_high[left:right]
         l = one_low[left:right]
         t = one_ts[left:right]
-        entry = float(event_close[i])
+
         long_type, long_time = _first_touch(
             entry=entry,
             high=h,
@@ -176,6 +180,7 @@ def apply_triple_barrier_labels(
                 "event_start": start,
                 "event_end": expiry,
                 "entry_time": entry_time,
+                "entry_price": entry,
                 "label": label,
                 "barrier_type": barrier_type,
                 "barrier_time": barrier_time,

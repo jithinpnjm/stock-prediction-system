@@ -31,8 +31,17 @@ def compute_mfe_mae(
     if direction not in (-1, 1):
         raise ValueError("direction must be -1 or 1")
 
-    event_ts = events.get_column("timestamp").to_list()
-    entry_prices = events.get_column("close").to_numpy()
+    event_ts = (
+        events.get_column("entry_time")
+        if "entry_time" in events.columns
+        else events.get_column("timestamp")
+    ).to_list()
+    entry_prices = (
+        events.get_column("entry_price")
+        if "entry_price" in events.columns
+        else events.get_column("close")
+    ).to_numpy()
+
     prices = one_minute.sort("timestamp")
     ts = np.asarray(prices.get_column("timestamp").to_list(), dtype=object)
     highs = prices.get_column("high").to_numpy()
@@ -44,6 +53,8 @@ def compute_mfe_mae(
     mae_time = [None] * len(event_ts)
 
     for i, start in enumerate(event_ts):
+        if entry_prices[i] is None:
+            continue
         expiry = min(
             start + timedelta(minutes=5 * horizon_bars),
             _session_close(start),
@@ -52,15 +63,18 @@ def compute_mfe_mae(
         right = int(np.searchsorted(ts, expiry, side="right"))
         if right <= left:
             continue
+
         h = highs[left:right]
         l = lows[left:right]
         entry = float(entry_prices[i])
+
         if direction == 1:
             favorable = h - entry
             adverse = entry - l
         else:
             favorable = entry - l
             adverse = h - entry
+
         mfe[i] = max(0.0, float(np.nanmax(favorable)))
         mae[i] = max(0.0, float(np.nanmax(adverse)))
         mfe_time[i] = ts[left + int(np.nanargmax(favorable))]

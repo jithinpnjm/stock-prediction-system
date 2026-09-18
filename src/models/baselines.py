@@ -49,7 +49,9 @@ def make_lightgbm_classifier(
     return lgb.LGBMClassifier(**base)
 
 
-def make_xgboost_classifier(*, seed: int = 42, params: dict[str, Any] | None = None):
+def make_xgboost_classifier(
+    *, seed: int = 42, params: dict[str, Any] | None = None
+):
     from xgboost import XGBClassifier
 
     base = {
@@ -66,6 +68,24 @@ def make_xgboost_classifier(*, seed: int = 42, params: dict[str, Any] | None = N
     }
     base.update(params or {})
     return XGBClassifier(**base)
+
+
+def make_catboost_classifier(
+    *, seed: int = 42, params: dict[str, Any] | None = None
+):
+    from catboost import CatBoostClassifier
+
+    base = {
+        "loss_function": "MultiClass",
+        "iterations": 1000,
+        "learning_rate": 0.03,
+        "depth": 6,
+        "random_seed": seed,
+        "verbose": False,
+        "thread_count": -1,
+    }
+    base.update(params or {})
+    return CatBoostClassifier(**base)
 
 
 def predict_probabilities(model, X: np.ndarray) -> np.ndarray:
