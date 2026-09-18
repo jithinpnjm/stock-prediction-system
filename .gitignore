@@ -23,7 +23,7 @@ secrets/*
 # Generated experiment artifacts
 mlflow.db
 mlruns/
-models/
+/models/
 artifacts/
 outputs/
 logs/
