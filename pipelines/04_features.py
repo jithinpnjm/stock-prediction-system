@@ -8,6 +8,7 @@ import yaml
 from src.features.candles import add_candle_geometry_features
 from src.features.clusters import add_candle_cluster_features
 from src.features.event_sampling import add_event_sampling_features
+from src.features.historical_intraday import add_historical_intraday_context
 from src.features.market_structure import add_market_structure_features
 from src.features.microstructure import add_1m_inside_5m_features
 from src.features.multitimeframe import add_multi_timeframe_features
@@ -30,6 +31,10 @@ def run():
     df=add_candle_cluster_features(df,int(cfg["cluster_max_bars"]))
     df=add_volatility_features(df,tuple(cfg["atr_periods"]))
     df=add_multi_timeframe_features(df,tuple(cfg["multi_timeframes"]))
+    if bool(cfg.get("enable_historical_intraday",True)):
+        df=add_historical_intraday_context(
+            df,int(cfg.get("historical_intraday_lookback_days",20))
+        )
     df=add_swing_features(df,int(cfg["swing_lookback"]))
     df=add_support_resistance_features(df,int(cfg["support_resistance_lookback"]))
     df=add_market_structure_features(df)
