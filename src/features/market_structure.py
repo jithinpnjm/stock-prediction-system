@@ -64,6 +64,9 @@ def add_market_structure_features(df: pl.DataFrame) -> pl.DataFrame:
     )
     if "f_swing_high_candidate" not in out.columns:
         out = add_swing_features(out)
+        out = out.with_columns(
+            pl.col("timestamp").dt.date().alias("_session_date")
+        )
 
     sh = out["f_swing_high_candidate"].to_numpy()
     sl = out["f_swing_low_candidate"].to_numpy()
@@ -75,6 +78,7 @@ def add_market_structure_features(df: pl.DataFrame) -> pl.DataFrame:
         sl.astype(bool),
         dates,
     )
+
     eps = 1e-9
     out = out.with_columns(
         pl.Series("f_last_swing_high", last_high),
