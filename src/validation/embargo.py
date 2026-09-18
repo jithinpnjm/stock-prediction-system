@@ -3,13 +3,13 @@ from __future__ import annotations
 import numpy as np
 
 
-def apply_embargo(
-    train_idx: np.ndarray,
-    test_idx: np.ndarray,
-    timestamps: np.ndarray,
-    embargo: int,
+def embargo_indices(
+    event_start_ns: np.ndarray,
+    *,
+    boundary_ns: int,
+    duration_ns: int,
 ) -> np.ndarray:
-    if embargo <= 0 or len(train_idx) == 0 or len(test_idx) == 0:
-        return train_idx
-    cutoff = np.asarray(timestamps)[test_idx].min() - embargo
-    return train_idx[np.asarray(timestamps)[train_idx] < cutoff]
+    return np.flatnonzero(
+        (event_start_ns >= boundary_ns)
+        & (event_start_ns <= boundary_ns + duration_ns)
+    )

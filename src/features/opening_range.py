@@ -5,45 +5,122 @@ import polars as pl
 
 def add_opening_range_features(
     df: pl.DataFrame,
-    windows: tuple[int, ...] = (3, 6),
+    windows: tuple[int, ...] = (1, 3, 6),
 ) -> pl.DataFrame:
-    out = df.sort("timestamp")
-    if "f_session_bar_index" not in out.columns:
-        from .time_features import add_time_features
-        out = add_time_features(out)
-    out = out.with_columns(
-        pl.col("timestamp").dt.date().alias("_session_date")
+    minutes_from_open = (
+        pl.col("timestamp").dt.hour() * 60
+        + pl.col("timestamp").dt.minute()
+        - (9 * 60 + 15)
     )
-    for n in windows:
-        stats = (
-            out.filter(pl.col("f_session_bar_index") < n)
-            .group_by("_session_date")
-            .agg(
-                pl.col("high").max().alias(f"_or{n}_high"),
-                pl.col("low").min().alias(f"_or{n}_low"),
-                pl.col("open").first().alias(f"_or{n}_open"),
-                pl.col("close").last().alias(f"_or{n}_close"),
+
+    # 5m timestamps represent candle CLOSES:
+    # 09:20 -> first bar, 09:25 -> second bar, ...
+    session_bar_index = (
+        (minutes_from_open / 5).floor()
+        .cast(pl.Int64)
+        - 1
+    )
+
+    out = df.with_columns(
+        session_bar_index.alias("_session_bar_index")
+    )
+
+    for bars in windows:
+        opening_high = (
+            pl.when(
+                pl.col("_session_bar_index") < bars
             )
+            .then(pl.col("high"))
+            .otherwise(None)
+            .max()
+            .over("session_date")
         )
-        out = out.join(stats, on="_session_date", how="left").with_columns(
-            pl.when(pl.col("f_session_bar_index") >= n - 1)
-            .then(pl.col(f"_or{n}_high") - pl.col(f"_or{n}_low"))
-            .otherwise(None).alias(f"f_or{n}_range"),
-            pl.when(pl.col("f_session_bar_index") >= n - 1)
-            .then(
-                (pl.col("close") - pl.col(f"_or{n}_low"))
-                / (pl.col(f"_or{n}_high") - pl.col(f"_or{n}_low") + 1e-9)
+        opening_low = (
+            pl.when(
+                pl.col("_session_bar_index") < bars
             )
-            .otherwise(None).alias(f"f_or{n}_position"),
-            pl.when(pl.col("f_session_bar_index") >= n - 1)
-            .then(
-                (pl.col("close") - pl.col(f"_or{n}_high"))
-            )
-            .otherwise(None).alias(f"f_distance_to_or{n}_high"),
-            pl.when(pl.col("f_session_bar_index") >= n - 1)
-            .then(
-                (pl.col("close") - pl.col(f"_or{n}_low"))
-            )
-            .otherwise(None).alias(f"f_distance_to_or{n}_low"),
-        ).drop([f"_or{n}_high", f"_or{n}_low", f"_or{n}_open", f"_or{n}_close"])
-    return out.drop("_session_date")
+            .then(pl.col("low"))
+            .otherwise(None)
+            .min()
+            .over("session_date")
+        )
+
+        range_complete = (
+            pl.col("_session_bar_index") >= bars - 1
+        )
+        breakout_window = (
+            pl.col("_session_bar_index") >= bars
+        )
+
+        out = out.with_columns(
+            [
+                opening_high.alias(
+                    f"opening_range_high_{bars}"
+                ),
+                opening_low.alias(
+                    f"opening_range_low_{bars}"
+                ),
+                range_complete.cast(pl.Int8).alias(
+                    f"opening_range_complete_{bars}"
+                ),
+            ]
+        ).with_columns(
+            [
+                (
+                    pl.col(f"opening_range_high_{bars}")
+                    - pl.col(f"opening_range_low_{bars}")
+                ).alias(
+                    f"opening_range_{bars}_size"
+                ),
+                pl.when(range_complete)
+                .then(
+                    (
+                        pl.col("close")
+                        - pl.col(
+                            f"opening_range_low_{bars}"
+                        )
+                    )
+                    / (
+                        pl.col(
+                            f"opening_range_high_{bars}"
+                        )
+                        - pl.col(
+                            f"opening_range_low_{bars}"
+                        )
+                        + 1e-9
+                    )
+                )
+                .otherwise(None)
+                .alias(
+                    f"position_in_opening_range_{bars}"
+                ),
+                pl.when(breakout_window)
+                .then(
+                    (
+                        pl.col("close")
+                        > pl.col(
+                            f"opening_range_high_{bars}"
+                        )
+                    ).cast(pl.Int8)
+                )
+                .otherwise(0)
+                .alias(
+                    f"breaks_opening_high_{bars}"
+                ),
+                pl.when(breakout_window)
+                .then(
+                    (
+                        pl.col("close")
+                        < pl.col(
+                            f"opening_range_low_{bars}"
+                        )
+                    ).cast(pl.Int8)
+                )
+                .otherwise(0)
+                .alias(
+                    f"breaks_opening_low_{bars}"
+                ),
+            ]
+        )
+
+    return out.drop("_session_bar_index")

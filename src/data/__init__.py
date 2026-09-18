@@ -1,1 +1,1 @@
-"""Data ingestion, validation and canonicalization."""
+"""Market-data ingestion, validation and canonicalization."""

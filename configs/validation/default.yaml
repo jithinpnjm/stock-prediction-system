@@ -1,3 +1,5 @@
 n_splits: 5
-embargo_bars: 75
-min_train_rows: 500
+embargo_minutes: 5
+cpcv_groups: 6
+cpcv_test_groups: 2
+allow_holdout_eval: false

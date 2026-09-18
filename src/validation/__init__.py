@@ -1,1 +1,1 @@
-"""Leakage-aware temporal validation and statistical diagnostics."""
+"""Leakage-safe time-series validation and statistical diagnostics."""

@@ -1,31 +1,28 @@
 from __future__ import annotations
 
 import math
+
 import polars as pl
 
 
-def add_time_features(df:pl.DataFrame)->pl.DataFrame:
-    out=df.sort("timestamp")
-    local=pl.col("timestamp").dt.convert_time_zone("Asia/Kolkata")
-    minutes=local.dt.hour()*60+local.dt.minute()
-    session_minutes=minutes-9*60-15
-    # 5m close timestamps are 09:20, 09:25, ... 15:30.
-    bar_index=((session_minutes//5)-1).clip(lower_bound=0)
-    phase=(
-        pl.when(session_minutes<60).then(0)
-        .when(session_minutes<180).then(1)
-        .when(session_minutes<300).then(2)
-        .otherwise(3)
+def add_time_features(df: pl.DataFrame) -> pl.DataFrame:
+    # timestamp is the 5m candle close time. Market session is 09:15-15:30 IST.
+    minutes = (
+        (pl.col("timestamp").dt.hour() * 60 + pl.col("timestamp").dt.minute()) - 9 * 60 - 15
     )
-    angle=pl.lit(2*math.pi)*minutes/(24*60)
-    return out.with_columns(
-        local.dt.hour().alias("f_hour"),
-        local.dt.minute().alias("f_minute"),
-        local.dt.weekday().alias("f_weekday"),
-        session_minutes.clip(lower_bound=0).alias("f_minutes_from_open"),
-        (15*60+30-minutes).clip(lower_bound=0).alias("f_minutes_to_close"),
-        bar_index.alias("f_session_bar_index"),
-        phase.alias("f_session_phase"),
-        angle.sin().alias("f_time_sin"),
-        angle.cos().alias("f_time_cos"),
+    session_minutes = pl.lit(375)
+    frac = minutes.cast(pl.Float64) / session_minutes
+    tod_angle = frac * (2.0 * math.pi)
+    weekday = pl.col("timestamp").dt.weekday()
+    return df.with_columns(
+        [
+            minutes.clip(lower_bound=0, upper_bound=375).alias("minutes_from_open"),
+            (375 - minutes).clip(lower_bound=0, upper_bound=375).alias("minutes_to_close"),
+            pl.when(minutes < 30).then(1).otherwise(0).alias("is_opening_30m"),
+            pl.when(minutes >= 330).then(1).otherwise(0).alias("is_closing_45m"),
+            (tod_angle.sin()).alias("time_sin"),
+            (tod_angle.cos()).alias("time_cos"),
+            ((weekday - 1) / 4.0 * (2.0 * math.pi)).sin().alias("weekday_sin"),
+            ((weekday - 1) / 4.0 * (2.0 * math.pi)).cos().alias("weekday_cos"),
+        ]
     )

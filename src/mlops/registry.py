@@ -1,8 +1,14 @@
 from __future__ import annotations
-import mlflow
-from mlflow.tracking import MlflowClient
 
-def register(run_id:str,artifact_path:str,name:str,alias:str|None=None):
-    version=mlflow.register_model(f"runs:/{run_id}/{artifact_path}",name)
-    if alias: MlflowClient().set_registered_model_alias(name,alias,version.version)
-    return version
+import mlflow
+
+
+def register_candidate(model_uri: str, model_name: str, *, alias: str | None = None):
+    registered = mlflow.register_model(model_uri=model_uri, name=model_name)
+    if alias:
+        from mlflow.tracking import MlflowClient
+
+        MlflowClient().set_registered_model_alias(
+            model_name, alias, registered.version
+        )
+    return registered

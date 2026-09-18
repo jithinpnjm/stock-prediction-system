@@ -1,27 +1,40 @@
 from __future__ import annotations
 
-import argparse
+import json
+import os
+from pathlib import Path
 
 import mlflow
-from mlflow.tracking import MlflowClient
 
 
-def run():
-    parser=argparse.ArgumentParser()
-    parser.add_argument("--run-id",required=True)
-    parser.add_argument("--artifact-path",default="model_fold_1")
-    parser.add_argument("--name",default="BankNifty_LGBM")
-    parser.add_argument("--alias",default=None)
-    args=parser.parse_args()
-    version=mlflow.register_model(
-        model_uri=f"runs:/{args.run_id}/{args.artifact_path}",name=args.name
+def run() -> None:
+    if os.getenv("ALLOW_MODEL_REGISTRATION") != "1":
+        raise SystemExit(
+            "Registration is intentionally disabled. Set ALLOW_MODEL_REGISTRATION=1 "
+            "only after the frozen-holdout and execution gates are approved."
+        )
+    report = json.loads(Path("artifacts/validation/report.json").read_text())
+    if not report.get("holdout_evaluated"):
+        raise SystemExit("Refusing registration without frozen-holdout evaluation")
+
+    experiment = mlflow.get_experiment_by_name("BankNifty_Research")
+    if experiment is None:
+        raise SystemExit("MLflow experiment not found")
+    runs = mlflow.search_runs(
+        experiment_ids=[experiment.experiment_id],
+        order_by=["start_time DESC"],
+        max_results=1,
     )
-    if args.alias:
-        MlflowClient().set_registered_model_alias(args.name,args.alias,version.version)
-        print(f"registered version={version.version}, alias={args.alias}")
-    else:
-        print(f"registered version={version.version}; no alias changed")
+    if runs.empty:
+        raise SystemExit("No MLflow training run found")
+
+    run_id = runs.iloc[0]["run_id"]
+    registered = mlflow.register_model(
+        model_uri=f"runs:/{run_id}/model",
+        name="BankNifty_LGBM",
+    )
+    print(f"Registered model version {registered.version}")
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     run()

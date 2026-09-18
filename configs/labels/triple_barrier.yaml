@@ -1,4 +1,0 @@
-target_points: 200
-stop_points: 70
-max_horizon_minutes: 375
-direction: both

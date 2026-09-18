@@ -1,52 +1,76 @@
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Iterator
+from itertools import combinations
 
 import numpy as np
+import pandas as pd
+
+DEFAULT_EMBARGO = pd.Timedelta(minutes=5)
 
 
-class PurgedTimeSeriesSplit:
-    """Chronological CV with interval-aware purging and embargo.
+def _to_ns(values: object) -> np.ndarray:
+    return pd.to_datetime(values, utc=True).astype("int64").to_numpy()
 
-    Each observation has [event_start, event_end]. A training event is removed
-    when its information/outcome interval overlaps the test interval.
-    """
 
-    def __init__(self, n_splits: int = 5, embargo: int = 0) -> None:
-        if n_splits < 2:
-            raise ValueError("n_splits must be >= 2")
+class PurgedWalkForwardSplit:
+    def __init__(self, n_splits: int = 5, *, embargo: pd.Timedelta | None = None) -> None:
+        if n_splits < 1:
+            raise ValueError("n_splits must be >= 1")
         self.n_splits = n_splits
-        self.embargo = embargo
+        self.embargo = DEFAULT_EMBARGO if embargo is None else embargo
 
-    def split(
-        self,
-        timestamps: np.ndarray,
-        event_end: np.ndarray | None = None,
-    ) -> Generator[tuple[np.ndarray, np.ndarray], None, None]:
-        n = len(timestamps)
+    def split(self, event_start: object, event_end: object) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+        starts = _to_ns(event_start)
+        ends = _to_ns(event_end)
+        if len(starts) != len(ends):
+            raise ValueError("event_start and event_end lengths differ")
+        n = len(starts)
         if n == 0:
             return
-        ts = np.asarray(timestamps)
-        end = ts if event_end is None else np.asarray(event_end)
-        order = np.argsort(ts)
-        ordered_ts = ts[order]
-        ordered_end = end[order]
-        edges = np.linspace(0, n, self.n_splits + 1, dtype=int)
-
-        for fold in range(self.n_splits):
-            test_lo, test_hi = edges[fold], edges[fold + 1]
-            test_idx = order[test_lo:test_hi]
+        block = max(1, n // (self.n_splits + 1))
+        gap_ns = int(self.embargo.total_seconds() * 1e9)
+        for i in range(self.n_splits):
+            test_start_idx = (i + 1) * block
+            test_end_idx = n if i == self.n_splits - 1 else min(n, (i + 2) * block)
+            test_idx = np.arange(test_start_idx, test_end_idx, dtype=int)
             if len(test_idx) == 0:
                 continue
-            test_start = ordered_ts[test_lo]
-            test_end = ordered_ts[test_hi - 1]
-            eligible = np.arange(0, test_lo)
-            if self.embargo:
-                cutoff = test_start - self.embargo
-                eligible = eligible[ordered_end[eligible] < cutoff]
-            else:
-                eligible = eligible[ordered_end[eligible] < test_start]
-            yield order[eligible], test_idx
+            test_start_time = starts[test_idx[0]]
+            train = np.arange(0, test_idx[0], dtype=int)
+            train = train[ends[train] < test_start_time]
+            train = train[starts[train] < test_start_time - gap_ns]
+            if len(train):
+                yield train, test_idx
 
-    def get_n_splits(self) -> int:
-        return self.n_splits
+
+class CombinatorialPurgedCV:
+    def __init__(self, n_groups: int = 6, n_test_groups: int = 2, *, embargo: pd.Timedelta | None = None) -> None:
+        if n_groups < 2:
+            raise ValueError("n_groups must be >= 2")
+        if n_test_groups <= 0 or n_test_groups >= n_groups:
+            raise ValueError("n_test_groups must be between 1 and n_groups-1")
+        self.n_groups = n_groups
+        self.n_test_groups = n_test_groups
+        self.embargo = DEFAULT_EMBARGO if embargo is None else embargo
+
+    def split(self, event_start: object, event_end: object) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+        starts = _to_ns(event_start)
+        ends = _to_ns(event_end)
+        if len(starts) != len(ends):
+            raise ValueError("event_start and event_end lengths differ")
+        n = len(starts)
+        groups = np.array_split(np.arange(n), self.n_groups)
+        gap_ns = int(self.embargo.total_seconds() * 1e9)
+        for selected in combinations(range(self.n_groups), self.n_test_groups):
+            test_idx = np.concatenate([groups[i] for i in selected])
+            test_idx.sort()
+            test_left = starts[test_idx].min()
+            test_right = ends[test_idx].max()
+            keep = np.ones(n, dtype=bool)
+            keep[test_idx] = False
+            overlaps = (ends >= test_left) & (starts <= test_right + gap_ns)
+            keep &= ~overlaps
+            train_idx = np.flatnonzero(keep)
+            if len(train_idx):
+                yield train_idx, test_idx

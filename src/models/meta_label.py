@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 import numpy as np
-from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
 
 
-def train_meta_model(X: np.ndarray, y: np.ndarray) -> HistGradientBoostingClassifier:
-    model=HistGradientBoostingClassifier(
-        max_iter=300,learning_rate=0.05,max_leaf_nodes=15,l2_regularization=1.0,
-        random_state=42
-    )
-    model.fit(X,y)
-    return model
+class MetaLabeler:
+    """Learns whether a proposed base-model trade should be taken."""
 
+    def __init__(self, seed: int = 42):
+        self.model = LogisticRegression(
+            max_iter=2000,
+            class_weight="balanced",
+            random_state=seed,
+        )
 
-def meta_probability(model, X: np.ndarray) -> np.ndarray:
-    return model.predict_proba(X)[:,1]
+    def fit(self, meta_features: np.ndarray, outcome: np.ndarray) -> "MetaLabeler":
+        self.model.fit(meta_features, outcome)
+        return self
+
+    def predict_proba(self, meta_features: np.ndarray) -> np.ndarray:
+        return self.model.predict_proba(meta_features)[:, 1]
+
+    def predict(self, meta_features: np.ndarray, threshold: float = 0.5) -> np.ndarray:
+        return (self.predict_proba(meta_features) >= threshold).astype(int)

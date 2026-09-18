@@ -1,1 +1,1 @@
-"""Experiment lineage and MLflow helpers."""
+"""Experiment lineage and reproducibility helpers."""

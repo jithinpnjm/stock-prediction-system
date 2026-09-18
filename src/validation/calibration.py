@@ -1,81 +1,64 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.optimize import minimize_scalar
-from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import log_loss
 
 
-class ProbabilityCalibrator:
-    def __init__(self, method: str = "sigmoid") -> None:
-        if method not in {"sigmoid", "isotonic"}:
-            raise ValueError("method must be sigmoid or isotonic")
-        self.method = method
-        self.model = None
+class MulticlassProbabilityCalibrator:
+    """Calibrate probabilities using a temporally earlier OOF segment."""
 
-    def fit(self, scores: np.ndarray, y: np.ndarray) -> "ProbabilityCalibrator":
-        scores=np.asarray(scores,dtype=float)
-        y=np.asarray(y)
-        if self.method=="isotonic":
-            self.model=IsotonicRegression(out_of_bounds="clip").fit(scores,y)
-        else:
-            self.model=LogisticRegression(max_iter=2000).fit(scores.reshape(-1,1),y)
+    def __init__(self, seed: int = 42):
+        self.model = LogisticRegression(C=1.0, max_iter=2000, multi_class="multinomial", random_state=seed)
+
+    @staticmethod
+    def _features(probabilities: np.ndarray) -> np.ndarray:
+        p = np.asarray(probabilities, dtype=float)
+        if p.ndim != 2:
+            raise ValueError("probabilities must be 2D")
+        p = np.clip(p, 1e-8, 1.0)
+        p /= p.sum(axis=1, keepdims=True)
+        return np.log(p)
+
+    def fit(self, probabilities: np.ndarray, y_true: np.ndarray):
+        if len(probabilities) != len(y_true):
+            raise ValueError("probability/label length mismatch")
+        self.model.fit(self._features(probabilities), np.asarray(y_true))
         return self
 
-    def predict_proba(self,scores:np.ndarray)->np.ndarray:
-        if self.model is None: raise RuntimeError("calibrator is not fitted")
-        scores=np.asarray(scores,dtype=float)
-        if self.method=="isotonic":
-            p=np.asarray(self.model.predict(scores))
-        else:
-            p=self.model.predict_proba(scores.reshape(-1,1))[:,1]
-        return np.column_stack([1-p,p])
+    def predict_proba(self, probabilities: np.ndarray) -> np.ndarray:
+        return self.model.predict_proba(self._features(probabilities))
 
 
-class TemperatureScaler:
-    """Multiclass temperature scaling fit only on a calibration/OOS set."""
-
-    def __init__(self) -> None:
-        self.temperature=1.0
-
-    def fit(self, probabilities:np.ndarray, y:np.ndarray)->"TemperatureScaler":
-        p=np.clip(np.asarray(probabilities,dtype=float),1e-8,1.0)
-        p=p/p.sum(axis=1,keepdims=True)
-        y=np.asarray(y,dtype=int)
-        logp=np.log(p)
-
-        def loss(log_t:float)->float:
-            t=float(np.exp(log_t))
-            z=logp/t
-            z-=z.max(axis=1,keepdims=True)
-            q=np.exp(z); q/=q.sum(axis=1,keepdims=True)
-            idx=np.asarray(y)+1
-            return float(-np.mean(np.log(np.clip(q[np.arange(len(y)),idx],1e-12,1.0))))
-
-        result=minimize_scalar(loss,bounds=(-2.0,2.0),method="bounded")
-        self.temperature=float(np.exp(result.x))
-        return self
-
-    def predict_proba(self,probabilities:np.ndarray)->np.ndarray:
-        p=np.clip(np.asarray(probabilities,dtype=float),1e-8,1.0)
-        p=p/p.sum(axis=1,keepdims=True)
-        z=np.log(p)/self.temperature
-        z-=z.max(axis=1,keepdims=True)
-        q=np.exp(z)
-        return q/q.sum(axis=1,keepdims=True)
-
-
-def expected_calibration_error(y_true:np.ndarray,p_positive:np.ndarray,bins:int=10)->float:
-    y=np.asarray(y_true,dtype=float)
-    p=np.clip(np.asarray(p_positive,dtype=float),0,1)
-    edges=np.linspace(0,1,bins+1)
-    ece=0.0
-    for lo,hi in zip(edges[:-1],edges[1:]):
-        mask=(p>=lo)&(p<=hi if hi==1 else p<hi)
-        if mask.any(): ece+=float(mask.mean()*abs(y[mask].mean()-p[mask].mean()))
+def expected_calibration_error(probabilities: np.ndarray, y_true: np.ndarray, *, n_bins: int = 10) -> float:
+    p = np.asarray(probabilities, dtype=float)
+    y = np.asarray(y_true)
+    if p.ndim != 2:
+        raise ValueError("probabilities must be 2D")
+    if len(p) != len(y):
+        raise ValueError("probability/label length mismatch")
+    confidence = p.max(axis=1)
+    predicted = p.argmax(axis=1)
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    ece = 0.0
+    for left, right in zip(bins[:-1], bins[1:]):
+        mask = (confidence > left) & (confidence <= right)
+        if mask.any():
+            ece += np.mean(mask) * abs(np.mean(predicted[mask] == y[mask]) - np.mean(confidence[mask]))
     return float(ece)
 
 
-def brier_score(y_true:np.ndarray,p_positive:np.ndarray)->float:
-    y=np.asarray(y_true,dtype=float); p=np.asarray(p_positive,dtype=float)
-    return float(np.mean((p-y)**2))
+def multiclass_logloss(probabilities: np.ndarray, y_true: np.ndarray) -> float:
+    p = np.asarray(probabilities, dtype=float)
+    return float(log_loss(np.asarray(y_true), p, labels=np.arange(p.shape[1])))
+
+
+def time_split_oof(probabilities: np.ndarray, y_true: np.ndarray, *, calibration_fraction: float = 0.5):
+    if not 0.0 < calibration_fraction < 1.0:
+        raise ValueError("calibration_fraction must be between 0 and 1")
+    split = int(len(y_true) * calibration_fraction)
+    if split < 20 or len(y_true) - split < 20:
+        raise ValueError("Not enough OOF rows for calibration")
+    calibrator = MulticlassProbabilityCalibrator()
+    calibrator.fit(probabilities[:split], y_true[:split])
+    return calibrator, probabilities[split:], np.asarray(y_true)[split:]

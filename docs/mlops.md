@@ -1,15 +1,19 @@
 # MLOps
 
-Git versions code and configuration. DVC versions datasets. MLflow versions experiments and model artifacts.
+Every model run should be reproducible from:
 
-Every training run records:
+- Git commit
+- DVC dataset/version identity
+- feature version
+- label version
+- split configuration
+- random seed
+- Python/package/runtime information
+- hardware metadata
+- model parameters
+- OOF predictions
 
-- Git commit;
-- dataset/feature/label/validation versions;
-- resolved configuration;
-- Python/runtime metadata;
-- fold metrics;
-- OOF predictions;
-- model artifacts.
+MLflow is the system of record for experiments and model artifacts.
 
-Model registration is non-destructive. No script changes a champion alias unless explicitly requested by the operator.
+Model registration is intentionally blocked unless the frozen holdout has been
+evaluated and the caller explicitly enables registration.

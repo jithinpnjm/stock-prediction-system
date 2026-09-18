@@ -1,37 +1,29 @@
 from __future__ import annotations
 
 import numpy as np
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import HistGradientBoostingRegressor
 
 
-class DiscreteHazardModel:
-    """Discrete-time hazard benchmark with explicit horizon-bucket state."""
+class TimeToEventModel:
+    """Practical baseline for time-to-barrier research.
 
-    def __init__(self):
-        self.models:dict[int,LogisticRegression]={}
+    The target is log(1 + duration_minutes). Censored observations are retained
+    with a configurable lower-bound treatment and must be evaluated separately
+    from uncensored events.
+    """
 
-    def fit(self,X:np.ndarray,event_buckets:np.ndarray,max_bucket:int):
-        buckets=np.asarray(event_buckets,dtype=int)
-        self.models={}
-        for bucket in range(max_bucket+1):
-            at_risk=buckets>=bucket
-            if not at_risk.any(): continue
-            y=(buckets[at_risk]==bucket).astype(int)
-            if np.unique(y).size<2:
-                continue
-            model=LogisticRegression(max_iter=1000,class_weight="balanced")
-            model.fit(X[at_risk],y)
-            self.models[bucket]=model
-        if not self.models: raise ValueError("no estimable hazard buckets")
+    def __init__(self, seed: int = 42):
+        self.model = HistGradientBoostingRegressor(
+            max_iter=300,
+            learning_rate=0.05,
+            max_leaf_nodes=31,
+            random_state=seed,
+        )
+
+    def fit(self, X, duration_minutes):
+        target = np.log1p(np.asarray(duration_minutes, dtype=float))
+        self.model.fit(X, target)
         return self
 
-    def predict_hazard(self,X:np.ndarray)->dict[int,np.ndarray]:
-        if not self.models: raise RuntimeError("model is not fitted")
-        return {b:m.predict_proba(X)[:,1] for b,m in self.models.items()}
-
-    def predict_survival(self,X:np.ndarray)->np.ndarray:
-        hazards=self.predict_hazard(X)
-        survival=np.ones(len(X))
-        for bucket in sorted(hazards):
-            survival*=1.0-np.clip(hazards[bucket],0,1)
-        return survival
+    def predict_minutes(self, X):
+        return np.expm1(self.model.predict(X))

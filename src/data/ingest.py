@@ -1,117 +1,50 @@
 from __future__ import annotations
 
-import hashlib
-import json
-import os
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
 
-import pandas as pd
 import polars as pl
 
-from .schemas import REQUIRED_COLUMNS, coerce_canonical_schema
+from src.common.contracts import MARKET_TIMEZONE
+from src.data.schemas import validate_schema
 
 
-def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
-    digest=hashlib.sha256()
-    with open(path,"rb") as handle:
-        for chunk in iter(lambda:handle.read(chunk_size),b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _normalize_timestamp(series: pl.Series, input_timezone: str | None) -> pl.Series:
+    if series.dtype == pl.String:
+        series = series.str.to_datetime(strict=True)
+    if not isinstance(series.dtype, pl.Datetime):
+        raise TypeError(f"Unsupported timestamp dtype: {series.dtype}")
+    if series.dtype.time_zone is None:
+        if not input_timezone:
+            raise ValueError("Naive timestamps require explicit input_timezone")
+        series = series.dt.replace_time_zone(input_timezone)
+    return series.dt.convert_time_zone(MARKET_TIMEZONE)
 
 
-def _normalize_naive_timestamp(df:pl.DataFrame, timezone:str)->pl.DataFrame:
-    dtype=df["timestamp"].dtype
-    if isinstance(dtype,pl.Datetime) and dtype.time_zone:
-        return df.with_columns(
-            pl.col("timestamp").dt.convert_time_zone(timezone).alias("timestamp")
-        )
-    return df.with_columns(
-        pl.col("timestamp").cast(pl.Datetime(time_zone=None))
-        .dt.replace_time_zone(timezone)
-        .alias("timestamp")
-    )
+def normalize_ohlcv(df: pl.DataFrame, *, input_timezone: str | None = MARKET_TIMEZONE, timestamp_column: str = "timestamp") -> pl.DataFrame:
+    if timestamp_column not in df.columns and "datetime" in df.columns:
+        df = df.rename({"datetime": "timestamp"})
+    if "timestamp" not in df.columns:
+        raise ValueError("No timestamp/datetime column found")
+    df = df.with_columns(_normalize_timestamp(df.get_column("timestamp"), input_timezone).alias("timestamp"))
+    df = df.with_columns([pl.col(c).cast(pl.Float64, strict=True).alias(c) for c in ("open", "high", "low", "close", "volume")])
+    df = df.with_columns(pl.col("timestamp").dt.date().alias("session_date"))
+    df = df.select(["session_date", "timestamp", "open", "high", "low", "close", "volume"]).sort("timestamp")
+    validate_schema(df, "1m")
+    return df
 
 
-def read_source(path:str|Path,*,naive_timezone:str="Asia/Kolkata")->pl.DataFrame:
-    """Read one source file, directory, or glob into canonical 1m schema."""
-    p=Path(path)
-    if any(ch in str(p) for ch in "*?["):
-        matches=sorted(Path().glob(str(p)))
-        return read_sources(matches,naive_timezone=naive_timezone)
-    if p.is_dir():
-        return read_sources(
-            sorted([*p.glob("*.parquet"),*p.glob("*.csv")]),
-            naive_timezone=naive_timezone,
-        )
-    if not p.exists():
-        raise FileNotFoundError(p)
-
-    if p.suffix.lower()==".csv":
-        df=pl.from_pandas(pd.read_csv(p))
-    elif p.suffix.lower() in {".parquet",".pq"}:
-        df=pl.read_parquet(p)
+def load_source(path: str | Path, *, input_timezone: str | None = MARKET_TIMEZONE) -> pl.DataFrame:
+    p = Path(path)
+    if p.suffix.lower() == ".csv":
+        df = pl.read_csv(p, try_parse_dates=True)
+    elif p.suffix.lower() in {".parquet", ".pq"}:
+        df = pl.read_parquet(p)
     else:
         raise ValueError(f"Unsupported source format: {p.suffix}")
-
-    rename={}
-    for old in ("datetime","date","ts","epoch"):
-        if old in df.columns and "timestamp" not in df.columns:
-            rename[old]="timestamp"
-            break
-    if rename:
-        df=df.rename(rename)
-    if "timestamp" not in df.columns:
-        raise ValueError(f"{p} has no timestamp column")
-    return _normalize_naive_timestamp(
-        coerce_canonical_schema(df),naive_timezone
-    )
+    return normalize_ohlcv(df, input_timezone=input_timezone)
 
 
-def read_sources(
-    paths:Iterable[str|Path],
-    *,
-    naive_timezone:str="Asia/Kolkata",
-)->pl.DataFrame:
-    frames=[read_source(path,naive_timezone=naive_timezone) for path in paths]
-    if not frames:
-        raise FileNotFoundError("No source files found")
-    return pl.concat(frames).unique(subset=["timestamp"],keep="last").sort("timestamp")
-
-
-def write_immutable(df:pl.DataFrame,destination:str|Path)->None:
-    destination=Path(destination); destination.parent.mkdir(parents=True,exist_ok=True)
-    if destination.exists():
-        existing=sha256_file(destination)
-        tmp=destination.with_suffix(destination.suffix+".new")
-        df.write_parquet(tmp)
-        new_hash=sha256_file(tmp)
-        tmp.unlink()
-        if existing!=new_hash:
-            raise FileExistsError(f"Refusing to overwrite immutable file: {destination}")
-        return
-    df.write_parquet(destination)
-
-
-def write_manifest(
-    source_path:str|Path,
-    output_path:str|Path,
-    *,
-    rows:int,
-    sha256:str,
-    git_commit:str|None=None,
-    transform_version:str="ingest_v2",
-)->None:
-    payload={
-        "source":str(source_path),
-        "output":str(output_path),
-        "rows":rows,
-        "sha256":sha256,
-        "transform_version":transform_version,
-        "created_at":datetime.now(timezone.utc).isoformat(),
-        "git_commit":git_commit or os.getenv("GIT_COMMIT","unknown"),
-        "required_columns":list(REQUIRED_COLUMNS),
-    }
-    p=Path(output_path); p.parent.mkdir(parents=True,exist_ok=True)
-    p.write_text(json.dumps(payload,indent=2,sort_keys=True)+"\n")
+def write_bronze(df: pl.DataFrame, path: str | Path) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(p, compression="zstd")

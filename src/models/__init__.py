@@ -1,1 +1,1 @@
-"""Baseline, sequence, regime, meta-label and magnitude model interfaces."""
+"""Predictive models and decision components."""

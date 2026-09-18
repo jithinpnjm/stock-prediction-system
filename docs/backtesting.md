@@ -1,16 +1,22 @@
 # Backtesting
 
-Backtests consume model predictions generated at completed 5-minute timestamps and execute against subsequent 1-minute source bars.
+The backtester consumes OOF model predictions joined to market data by timestamp.
 
-The execution model is explicit about:
+Signals never align by row number.
 
-- signal timestamp;
-- latency;
-- entry/exit slippage;
-- fixed order commission;
-- target/stop path;
-- ambiguous same-bar collisions;
-- evaluation entry window;
-- session flattening.
+Execution supports configurable:
 
-The current engine is a research benchmark, not a broker emulator. Broker-specific charges, spreads, impact and instrument-specific execution must be added before any production/live-trading conclusion.
+- latency in bars
+- next-bar open or same-bar close execution
+- bid/ask spread proxy
+- slippage
+- flat per-order commission
+- variable transaction costs in basis points
+- unit sizing and point value
+
+The current implementation is a signal/futures-style point-PnL engine. It is not an
+options-pricing engine. Options backtests require contract-level historical option
+data, expiry selection, Greeks, spreads, and realistic fill logic.
+
+A research result is incomplete without cost sensitivity, drawdown, trade frequency,
+win/loss distribution and stability by regime/time period.

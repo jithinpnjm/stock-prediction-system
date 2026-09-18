@@ -1,49 +1,49 @@
-# Python
+# Python/runtime
 .venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 *.egg-info/
 
-# Environment and secrets
+# Secrets
 .env
 .env.*
 !.env.example
-secrets/*
-!secrets/fyers_auth.example.json
+secrets/*.json
+!secrets/*.example.json
 *.pem
 *.key
-*credentials*
-*credential*
-*token*
+*access_token*
+*refresh_token*
 
-# Generated experiment artifacts
+# MLflow / local experiment state
 mlflow.db
 mlruns/
-models/
+.mlflow/
+
+# Generated model/artifact outputs
 artifacts/
+models/
 outputs/
 logs/
-reports/*.png
-reports/*.html
 
-# DVC cache
-.dvc/cache/
+# Generated derived datasets
+data/bronze/
+data/silver/
+data/gold/
+data/ml/
+data/backtest/
 
-# Generated datasets; use DVC pointers for durable versions
-data/bronze/*.parquet
-data/silver/*.parquet
-data/gold/*.parquet
-data/ml/*.parquet
-data/predictions/*.parquet
-data/backtest/*.parquet
+# Downloaded raw source payloads and generated manifests
 data/raw/fyers/*.parquet
-data/raw/fyers/no_data_days.json
+data/raw/fyers/*.csv
+data/raw/fyers_manifests/
 
 # IDE / OS
 .idea/
 .vscode/
 .DS_Store
-*.log

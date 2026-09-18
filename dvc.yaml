@@ -4,87 +4,106 @@ stages:
     deps:
       - pipelines/01_ingest.py
       - src/data/ingest.py
-      - src/data/schemas.py
-    params:
-      - data.raw_source
-      - data.bronze
+      - configs/data/banknifty.yaml
+      - data/raw
     outs:
-      - data/bronze/validated_1m.parquet
+      - data/bronze/1m_canonical.parquet
+
   validate:
     cmd: python pipelines/02_validate.py
     deps:
-      - data/bronze/validated_1m.parquet
-      - configs/data/nse_holidays.yaml
       - pipelines/02_validate.py
       - src/data/validate.py
+      - src/data/calendar.py
+      - data/bronze/1m_canonical.parquet
+      - configs/data/nse_holidays.csv
     outs:
-      - data/bronze/validation_report.json
+      - artifacts/validation/1m_report.json
+
   aggregate:
     cmd: python pipelines/03_aggregate_5m.py
     deps:
-      - data/bronze/validated_1m.parquet
-      - configs/data/nse_holidays.yaml
       - pipelines/03_aggregate_5m.py
       - src/data/aggregate.py
+      - data/bronze/1m_canonical.parquet
     outs:
       - data/silver/5m_canonical.parquet
+
   features:
     cmd: python pipelines/04_features.py
     deps:
+      - pipelines/04_features.py
+      - src/features
+      - data/bronze/1m_canonical.parquet
       - data/silver/5m_canonical.parquet
       - configs/features/default.yaml
-      - pipelines/04_features.py
     outs:
-      - data/silver/5m_features.parquet
+      - data/gold/features_v1.parquet
+
   labels:
     cmd: python pipelines/05_labels.py
     deps:
-      - data/silver/5m_features.parquet
-      - data/bronze/validated_1m.parquet
-      - configs/labels/triple_barrier.yaml
       - pipelines/05_labels.py
+      - src/labels
+      - data/bronze/1m_canonical.parquet
+      - data/gold/features_v1.parquet
+      - configs/labels/baseline.yaml
     outs:
       - data/gold/dataset_v1.parquet
+
   dataset:
     cmd: python pipelines/06_build_dataset.py
     deps:
-      - data/gold/dataset_v1.parquet
       - pipelines/06_build_dataset.py
+      - data/gold/dataset_v1.parquet
     outs:
-      - data/ml/training_dataset.parquet
-      - data/ml/feature_schema.json
+      - data/ml/training_frame.parquet
+      - data/ml/X.parquet
+      - data/ml/y.parquet
+      - data/ml/feature_columns.json
+
   train:
     cmd: python pipelines/07_train.py
     deps:
-      - data/ml/training_dataset.parquet
-      - configs/models/lightgbm.yaml
-      - configs/validation/default.yaml
       - pipelines/07_train.py
+      - src/models
+      - src/validation
+      - src/mlops
+      - data/ml/training_frame.parquet
+      - configs/models/lgbm_baseline.yaml
+      - configs/validation/default.yaml
+      - configs/experiments/default.yaml
     outs:
-      - data/predictions/lgbm_oof.parquet
+      - data/ml/oof_predictions.parquet
+      - artifacts/models/lgbm_dev.joblib
+
   validate_model:
     cmd: python pipelines/08_validate.py
     deps:
-      - data/predictions/lgbm_oof.parquet
       - pipelines/08_validate.py
+      - data/ml/oof_predictions.parquet
+      - artifacts/models/lgbm_dev.joblib
     outs:
-      - reports/validation_report.json
+      - artifacts/validation/report.json
+
   backtest:
     cmd: python pipelines/09_backtest.py
     deps:
-      - data/predictions/lgbm_oof.parquet
-      - data/bronze/validated_1m.parquet
-      - configs/backtest/default.yaml
       - pipelines/09_backtest.py
+      - src/backtest
+      - data/ml/oof_predictions.parquet
+      - data/silver/5m_canonical.parquet
+      - configs/backtest/default.yaml
     outs:
       - data/backtest/equity_curve.parquet
       - data/backtest/trades.parquet
+      - data/backtest/predictions_with_prices.parquet
+
   report:
     cmd: python pipelines/10_report.py
     deps:
-      - reports/validation_report.json
+      - pipelines/10_report.py
       - data/backtest/equity_curve.parquet
       - data/backtest/trades.parquet
-      - pipelines/10_report.py
     outs:
-      - reports/research_report.json
+      - artifacts/backtest/report.json
