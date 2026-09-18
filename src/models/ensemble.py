@@ -3,58 +3,36 @@ from __future__ import annotations
 import numpy as np
 
 
-def blend_probabilities(
-    probability_arrays: list[np.ndarray],
+def weighted_probability_ensemble(
+    probabilities: list[np.ndarray],
     weights: list[float] | None = None,
 ) -> np.ndarray:
-    if not probability_arrays:
-        raise ValueError("At least one probability array is required")
-    shapes = {np.asarray(p).shape for p in probability_arrays}
-    if len(shapes) != 1:
-        raise ValueError("All probability arrays must have the same shape")
+    if not probabilities:
+        raise ValueError("at least one probability matrix is required")
     if weights is None:
-        weights = [1.0] * len(probability_arrays)
-    if len(weights) != len(probability_arrays):
-        raise ValueError("weights length mismatch")
-    w = np.asarray(weights, dtype=float)
-    w /= w.sum()
-    blended = sum(weight * np.asarray(p) for weight, p in zip(w, probability_arrays))
-    blended /= blended.sum(axis=1, keepdims=True)
-    return blended
+        weights=[1.0]*len(probabilities)
+    if len(weights)!=len(probabilities):
+        raise ValueError("weights/probabilities length mismatch")
+    w=np.asarray(weights,dtype=float)
+    if np.any(w<0) or w.sum()<=0:
+        raise ValueError("weights must be non-negative and non-zero")
+    w/=w.sum()
+    out=sum(p*weight for p,weight in zip(probabilities,w))
+    return out/out.sum(axis=1,keepdims=True)
 
 
-def decision_from_probabilities(
+def decision_with_abstention(
     probabilities: np.ndarray,
     *,
-    class_order=(-1, 0, 1),
-    min_confidence: float = 0.5,
-    min_edge: float = 0.1,
-) -> np.ndarray:
-    p = np.asarray(probabilities)
-    order = np.asarray(class_order)
-    top = p.argmax(axis=1)
-    second = np.partition(p, -2, axis=1)[:, -2]
-    confidence = p[np.arange(len(p)), top]
-    edge = confidence - second
-    decisions = np.zeros(len(p), dtype=int)
-    valid = (confidence >= min_confidence) & (edge >= min_edge)
-    decisions[valid] = order[top[valid]]
-    return decisions
-
-
-def expected_value_per_point(
-    probabilities: np.ndarray,
-    *,
-    target_points: float,
-    stop_points: float,
-    class_order=(-1, 0, 1),
-) -> np.ndarray:
-    p = np.asarray(probabilities)
-    mapping = {c: i for i, c in enumerate(class_order)}
-    p_long = p[:, mapping[1]]
-    p_short = p[:, mapping[-1]]
-    return (
-        p_long * (target_points + stop_points) - stop_points
-    ), (
-        p_short * (target_points + stop_points) - stop_points
-    )
+    class_labels: tuple[int,int,int]=(-1,0,1),
+    min_probability: float = 0.55,
+    min_edge: float = 0.10,
+) -> tuple[np.ndarray, np.ndarray]:
+    p=np.asarray(probabilities,dtype=float)
+    idx=np.argmax(p,axis=1)
+    best=p[np.arange(len(p)),idx]
+    runner=np.partition(p,-2,axis=1)[:,-2]
+    signals=np.zeros(len(p),dtype=np.int8)
+    take=(best>=min_probability)&((best-runner)>=min_edge)
+    signals[take]=np.asarray(class_labels,dtype=np.int8)[idx[take]]
+    return signals,best

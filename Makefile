@@ -1,47 +1,34 @@
-.PHONY: setup lint test test-cov pipeline data features labels train validate backtest report ci
+.PHONY: setup lint typecheck test ci pipeline dvc-status sequence-tcn sequence-transformer sweep targets
 
 setup:
-	python -m pip install -e ".[dev]"
+	python -m pip install -e ".[dev,ml,mlops,ingest,research]"
 	pre-commit install
 
 lint:
-	ruff check .
-	ruff format --check .
+	ruff check src pipelines tests
+
+typecheck:
+	mypy src
 
 test:
 	pytest
 
-test-cov:
-	pytest --cov=src --cov-report=term-missing --cov-fail-under=70
-
-data:
-	python scripts/download_banknifty.py --start 2020-01-01 --end $$(date +%Y-%m-%d)
+ci: lint test
 
 pipeline:
-	python pipelines/01_ingest.py
-	python pipelines/02_validate.py
-	python pipelines/03_aggregate_5m.py
-	python pipelines/04_features.py
-	python pipelines/05_labels.py
-	python pipelines/06_build_dataset.py
-	python pipelines/07_train.py
-	python pipelines/08_validate.py
-	python pipelines/09_backtest.py
-	python pipelines/10_report.py
+	python -m pipelines
 
-features:
-	python pipelines/03_aggregate_5m.py && python pipelines/04_features.py
+sequence-tcn:
+	python pipelines/07_sequence_train.py tcn
 
-labels:
-	python pipelines/05_labels.py && python pipelines/06_build_dataset.py
+sequence-transformer:
+	python pipelines/07_sequence_train.py transformer
 
-train:
-	python pipelines/07_train.py
+sweep:
+	python pipelines/07_sweep_lgbm.py --trials 100
 
-validate:
-	python pipelines/08_validate.py
+targets:
+	python pipelines/05_target_ladder.py
 
-backtest:
-	python pipelines/09_backtest.py && python pipelines/10_report.py
-
-ci: lint test
+dvc-status:
+	dvc status

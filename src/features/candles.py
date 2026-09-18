@@ -3,34 +3,36 @@ from __future__ import annotations
 import polars as pl
 
 
-def add_candle_geometry_features(df: pl.DataFrame) -> pl.DataFrame:
-    eps = pl.lit(1e-9)
+def add_candle_geometry_features(df:pl.DataFrame)->pl.DataFrame:
+    eps=1e-9
+    out=df.sort("timestamp").with_columns(
+        pl.col("timestamp").dt.date().alias("_session_date")
+    )
     return (
-        df.with_columns(
-            [
-                (pl.col("high") - pl.col("low")).alias("range"),
-                (pl.col("close") - pl.col("open")).alias("body"),
-                pl.max_horizontal("open", "close").alias("_body_top"),
-                pl.min_horizontal("open", "close").alias("_body_bottom"),
-            ]
+        out.with_columns(
+            (pl.col("high")-pl.col("low")).alias("f_range"),
+            (pl.col("close")-pl.col("open")).alias("f_body"),
+            (
+                pl.col("close")/pl.col("close").shift(1).over("_session_date")-1.0
+            ).alias("f_return_1"),
+            pl.max_horizontal("open","close").alias("_top"),
+            pl.min_horizontal("open","close").alias("_bottom"),
         )
         .with_columns(
-            [
-                (pl.col("high") - pl.col("_body_top")).alias("upper_wick"),
-                (pl.col("_body_bottom") - pl.col("low")).alias("lower_wick"),
-                (pl.col("body").abs() / (pl.col("range") + eps)).alias("body_pct_range"),
-                (pl.col("upper_wick") / (pl.col("range") + eps)).alias("upper_wick_pct_range"),
-                (pl.col("lower_wick") / (pl.col("range") + eps)).alias("lower_wick_pct_range"),
-                (pl.col("range") / (pl.col("close").abs() + eps) * 10_000).alias("range_bps"),
-                (pl.col("body") / (pl.col("close").shift(1).abs() + eps) * 10_000).alias("body_bps"),
-                pl.when(pl.col("close") > pl.col("open"))
-                .then(1)
-                .when(pl.col("close") < pl.col("open"))
-                .then(-1)
-                .otherwise(0)
-                .alias("direction"),
-                ((pl.col("close") - pl.col("low")) / (pl.col("range") + eps)).alias("close_location"),
-            ]
+            (pl.col("high")-pl.col("_top")).alias("f_upper_wick"),
+            (pl.col("_bottom")-pl.col("low")).alias("f_lower_wick"),
+            (
+                (pl.col("close")-pl.col("low"))/(pl.col("f_range")+eps)
+            ).alias("f_close_location"),
         )
-        .drop(["_body_top", "_body_bottom"])
+        .with_columns(
+            (pl.col("f_body").abs()/(pl.col("f_range")+eps)).alias("f_body_pct"),
+            (pl.col("f_upper_wick")/(pl.col("f_range")+eps)).alias("f_upper_wick_pct"),
+            (pl.col("f_lower_wick")/(pl.col("f_range")+eps)).alias("f_lower_wick_pct"),
+            pl.when(pl.col("close")>pl.col("open")).then(1)
+            .when(pl.col("close")<pl.col("open")).then(-1)
+            .otherwise(0).alias("f_direction"),
+            (pl.col("f_range")/(pl.col("close")+eps)).alias("f_range_pct"),
+        )
+        .drop(["_top","_bottom","_session_date"])
     )

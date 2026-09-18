@@ -1,0 +1,8 @@
+symbol: NSE:NIFTYBANK-INDEX
+timezone: Asia/Kolkata
+source_timeframe: 1m
+model_timeframe: 5m
+session_open: "09:15"
+session_close: "15:30"
+evaluation_open: "09:30"
+evaluation_close: "15:00"

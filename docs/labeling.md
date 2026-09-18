@@ -1,23 +1,16 @@
 # Labeling
 
-Labels are event outcomes, not next-candle direction.
+Primary event labels use Bank Nifty SPOT.
 
-For each 5m event at time t:
+## Baseline
 
-1. Define an entry time t + execution delay.
-2. Look forward through the 1m path only until the time barrier or session close.
-3. Evaluate direction-specific target/stop barriers.
-4. Record the first clean barrier event.
-5. Mark same-minute target/stop collisions as ambiguous; they are excluded from the
-   default training set rather than being assigned an arbitrary side.
-6. Store MFE/MAE and barrier timing independently from the categorical label.
+- Long: +200 points before -70 points.
+- Short: -200 points before +70 points.
+- Otherwise: no-event/timeout.
+- Horizon: bounded by the configured horizon and same-session data.
 
-Baseline distances:
+The labeler evaluates subsequent 1-minute bars after a completed 5-minute event. This preserves the underlying path needed to resolve what can and cannot be inferred from a 5-minute OHLC bar.
 
-- target: 200 points
-- stop: 70 points
-- horizon: 75 x 5m bars
-- entry delay: 1 minute
+Same-bar target/stop collisions are treated conservatively as adverse-first because tick ordering is not available.
 
-Target ladders are supported so target/stop selection can be treated as an
-experiment instead of an undocumented constant.
+Every sample retains event_end_timestamp and barrier_timestamp for leakage-safe interval purging and audit.

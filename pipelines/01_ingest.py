@@ -1,35 +1,35 @@
 from __future__ import annotations
 
-import glob
 import os
 from pathlib import Path
 
 import polars as pl
 
-from src.common.config import load_yaml
-from src.data.ingest import load_source, write_bronze
+from src.data.ingest import read_source
+from src.data.schemas import validate_required_schema
 
 
-def discover_sources(config: dict) -> list[str]:
-    sources = sorted(glob.glob(config["source"]["raw_glob"]))
-    if sources:
-        return sources
-    for fallback in config["ingestion"].get("allow_legacy_files", []):
-        if Path(fallback).exists():
-            return [fallback]
-    raise FileNotFoundError("No configured raw data source was found")
+def run():
+    source=os.getenv("RAW_SOURCE_PATH","data/raw/fyers")
+    legacy_candidates=[
+        Path("data/banknifty_spot_1m.csv"),
+        Path("data/raw/1m_data.parquet"),
+    ]
+    try:
+        df=read_source(source)
+    except FileNotFoundError:
+        for candidate in legacy_candidates:
+            if candidate.exists():
+                df=read_source(candidate)
+                break
+        else:
+            raise
+    validate_required_schema(df)
+    out=Path(os.getenv("BRONZE_PATH","data/bronze/validated_1m.parquet"))
+    out.parent.mkdir(parents=True,exist_ok=True)
+    df.write_parquet(out)
+    print(f"ingested {df.height} rows -> {out}")
 
 
-def run() -> None:
-    config = load_yaml(os.getenv("DATA_CONFIG", "configs/data/banknifty.yaml"))
-    sources = discover_sources(config)
-    frames = [load_source(p, input_timezone=config["source"]["timezone"]) for p in sources]
-    df = pl.concat(frames, how="diagonal_relaxed").sort("timestamp")
-    if df.get_column("timestamp").n_unique() != df.height:
-        raise ValueError("Duplicate timestamps found during ingestion; source data was not silently deduplicated")
-    write_bronze(df, config["ingestion"]["bronze_path"])
-    print(f"Ingested {len(sources)} source file(s), {df.height} canonical 1m rows")
-
-
-if __name__ == "__main__":
+if __name__=="__main__":
     run()

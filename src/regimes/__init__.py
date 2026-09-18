@@ -1,1 +1,1 @@
-"""Market regime detection utilities."""
+"""Market-regime estimators."""

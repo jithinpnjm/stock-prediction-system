@@ -1,112 +1,58 @@
 from __future__ import annotations
 
-import os
+import json
+from dataclasses import asdict
+from pathlib import Path
 
 import polars as pl
+import yaml
 
-from src.backtest.decision import build_trade_decisions
-from src.backtest.engine import EventDrivenBacktester
-from src.backtest.execution import ExecutionCosts
-from src.common.config import load_yaml
+from src.backtest.engine import BacktestConfig,EventDrivenBacktester
+from src.backtest.execution import ExecutionConfig
+from src.models.ensemble import decision_with_abstention
 
 
-def run() -> None:
-    cfg = load_yaml(
-        os.getenv(
-            "BACKTEST_CONFIG",
-            "configs/backtest/default.yaml",
-        )
+def run():
+    cfg=yaml.safe_load(Path("configs/backtest/default.yaml").read_text())
+    pred=pl.read_parquet("data/predictions/lgbm_oof.parquet").sort("timestamp")
+    probs=pred.select(["p_short","p_none","p_long"]).to_numpy()
+    signals,confidence=decision_with_abstention(
+        probs,min_probability=float(cfg["min_probability"]),min_edge=float(cfg["min_edge"])
     )
-
-    prices = pl.read_parquet(
-        "data/silver/5m_canonical.parquet"
+    signals_df=pred.select("timestamp").with_columns(
+        pl.Series("signal",signals),pl.Series("confidence",confidence)
     )
-    predictions = pl.read_parquet(
-        "data/ml/calibrated_oof_predictions.parquet"
-    )
-
-    merged = (
-        predictions
-        .join(prices, on="timestamp", how="inner")
-        .sort("timestamp")
-    )
-
-    if merged.is_empty():
-        raise RuntimeError(
-            "No timestamp overlap between predictions and prices"
-        )
-
-    decisions = build_trade_decisions(
-        merged,
-        min_confidence=float(cfg["min_confidence"]),
-        min_edge=float(cfg["min_edge"]),
-    )
-
-    backtester = EventDrivenBacktester(
-        decisions,
+    bars=pl.read_parquet("data/bronze/validated_1m.parquet")
+    bt_cfg=BacktestConfig(
         initial_capital=float(cfg["initial_capital"]),
-        units=float(cfg["units"]),
-        point_value=float(cfg["point_value"]),
-        latency_bars=int(cfg["latency_bars"]),
-        execution_price_column=cfg["execution_price"],
-        costs=ExecutionCosts(
-            spread_points=float(
-                cfg["spread_points"]
-            ),
-            slippage_points=float(
-                cfg["slippage_points"]
-            ),
-            commission_per_order=float(
-                cfg["commission_per_order"]
-            ),
-            transaction_cost_bps=float(
-                cfg["transaction_cost_bps"]
-            ),
-        ),
-        allow_overnight=bool(
-            cfg.get("allow_overnight", False)
+        target_points=float(cfg["target_points"]),
+        stop_points=float(cfg["stop_points"]),
+        entry_start=cfg["entry_start"],entry_end=cfg["entry_end"],
+        flatten_time=cfg["flatten_time"],
+        execution=ExecutionConfig(
+            slippage_points=float(cfg["slippage_points"]),
+            commission_per_order=float(cfg["commission_per_order"]),
+            quantity=float(cfg["quantity"]),
+            latency_bars=int(cfg["latency_bars"]),
         ),
     )
-
-    equity, trades = backtester.run()
-
-    os.makedirs("data/backtest", exist_ok=True)
-    equity.write_parquet(
-        "data/backtest/equity_curve.parquet",
-        compression="zstd",
-    )
-
-    pl.DataFrame(
-        [
-            {
-                "entry_time": trade.entry_time,
-                "exit_time": trade.exit_time,
-                "entry_price": trade.entry_price,
-                "exit_price": trade.exit_price,
-                "direction": trade.direction,
-                "units": trade.units,
-                "gross_pnl": trade.gross_pnl,
-                "commissions": trade.commissions,
-                "transaction_costs": trade.transaction_costs,
-                "pnl": trade.pnl,
-                "exit_reason": trade.exit_reason,
-            }
-            for trade in trades
-        ]
-    ).write_parquet(
-        "data/backtest/trades.parquet",
-        compression="zstd",
-    )
-
-    decisions.write_parquet(
-        "data/backtest/predictions_with_prices.parquet",
-        compression="zstd",
-    )
-
-    print(
-        f"Backtest produced {len(trades)} trades"
-    )
+    equity,trades=EventDrivenBacktester(bt_cfg).run(signals_df,bars)
+    Path("data/backtest").mkdir(parents=True,exist_ok=True)
+    equity.write_parquet("data/backtest/equity_curve.parquet")
+    trade_rows=[asdict(t) for t in trades]
+    pl.DataFrame(trade_rows).write_parquet("data/backtest/trades.parquet") if trade_rows else pl.DataFrame({
+        "entry_time":pl.Series([],dtype=pl.Datetime("ns",time_zone="Asia/Kolkata")),
+        "exit_time":pl.Series([],dtype=pl.Datetime("ns",time_zone="Asia/Kolkata")),
+        "direction":pl.Series([],dtype=pl.Int8),
+        "quantity":pl.Series([],dtype=pl.Float64),
+        "entry_price":pl.Series([],dtype=pl.Float64),
+        "exit_price":pl.Series([],dtype=pl.Float64),
+        "pnl":pl.Series([],dtype=pl.Float64),
+        "exit_reason":pl.Series([],dtype=pl.String),
+        "signal_time":pl.Series([],dtype=pl.Datetime("ns",time_zone="Asia/Kolkata")),
+    }).write_parquet("data/backtest/trades.parquet")
+    print(f"backtest trades={len(trades)}")
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     run()
