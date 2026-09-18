@@ -4,3 +4,5 @@ batch_size: 256
 learning_rate: 0.001
 patience: 8
 device: auto
+embargo_bars: 75
+min_train_rows: 500
