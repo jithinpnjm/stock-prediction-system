@@ -1,19 +1,21 @@
-.PHONY: setup lint test clean pipeline
+.PHONY: setup lint test test-cov pipeline data features labels train validate backtest report ci
 
 setup:
-	pip install -e ".[dev]"
+	python -m pip install -e ".[dev]"
 	pre-commit install
 
 lint:
 	ruff check .
+	ruff format --check .
 
 test:
-	pytest tests/
+	pytest
 
-clean:
-	find . -type d -name "__pycache__" -exec rm -rf {} +
-	find . -type d -name ".pytest_cache" -exec rm -rf {} +
-	find . -type d -name ".ruff_cache" -exec rm -rf {} +
+test-cov:
+	pytest --cov=src --cov-report=term-missing --cov-fail-under=70
+
+data:
+	python scripts/download_banknifty.py --start 2020-01-01 --end $$(date +%Y-%m-%d)
 
 pipeline:
 	python pipelines/01_ingest.py
@@ -26,3 +28,20 @@ pipeline:
 	python pipelines/08_validate.py
 	python pipelines/09_backtest.py
 	python pipelines/10_report.py
+
+features:
+	python pipelines/03_aggregate_5m.py && python pipelines/04_features.py
+
+labels:
+	python pipelines/05_labels.py && python pipelines/06_build_dataset.py
+
+train:
+	python pipelines/07_train.py
+
+validate:
+	python pipelines/08_validate.py
+
+backtest:
+	python pipelines/09_backtest.py && python pipelines/10_report.py
+
+ci: lint test

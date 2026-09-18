@@ -1,41 +1,41 @@
-# Python
+# Python/runtime
 .venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
 
-# Environment and secrets
+# Secrets
 .env
 .env.*
 !.env.example
+secrets/*.json
+!secrets/*.example.json
 *.pem
 *.key
-*credentials*
-*credential*
-*secret*
-*token*
-*auth*
+*access_token*
+*refresh_token*
 
-# DVC / ML artifacts
-.dvc/cache/
-.mlflow/
+# MLflow / local experiment state
+mlflow.db
 mlruns/
-*.model
-*.pkl
-*.pickle
-*.joblib
+.mlflow/
 
-# Local data and generated artifacts
-logs/
+# Generated model/artifact outputs
 artifacts/
+models/
 outputs/
+logs/
 
-# IDE / OS
-.idea/
-.vscode/
-.DS_Store
-
-
-*.log
+# Generated datasets; source-of-truth raw files are versioned through DVC.
+data/bronze/
+data/silver/
+data/gold/
+data/ml/
+data/backtest/
+data/raw/fyers/*.parquet
+data/raw/fyers/*.csv
