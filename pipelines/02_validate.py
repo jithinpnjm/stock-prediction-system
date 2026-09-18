@@ -1,66 +1,33 @@
+from __future__ import annotations
+
+import json
 import os
-import sys
+from pathlib import Path
 
 import polars as pl
 
+from src.common.config import load_yaml
+from src.data.validate import validate_1m
 
-def run():
-    print("Running pipeline step: 02_validate.py")
 
-    RAW_DATA_PATH = os.environ.get("RAW_1M_DATA_PATH", "data/raw/1m_data.parquet")
-
-    try:
-        df = pl.read_parquet(RAW_DATA_PATH)
-    except FileNotFoundError:
-        print(f"ERROR: Could not read {RAW_DATA_PATH}. Run 01_ingest.py first.")
-        sys.exit(1)
-
-    print(f"Running data quality gates on {df.height} rows...")
-
-    # Gate 1: Monotonic and duplicate timestamps
-    if df.height != df.select(pl.col("datetime").n_unique()).item():
-        print("FAILED GATE: Duplicate timestamps found.")
-        sys.exit(1)
-
-    is_sorted = df.select(pl.col("datetime").is_sorted()).item()
-    if not is_sorted:
-        print("FAILED GATE: Timestamps are not strictly monotonic/sorted.")
-        sys.exit(1)
-
-    # Gate 2: OHLC Geometry Logic (Low <= Open/Close <= High)
-    invalid_geometry = df.filter(
-        (pl.col("low") > pl.col("high"))
-        | (pl.col("open") < pl.col("low"))
-        | (pl.col("open") > pl.col("high"))
-        | (pl.col("close") < pl.col("low"))
-        | (pl.col("close") > pl.col("high"))
+def run() -> None:
+    config = load_yaml(os.getenv("DATA_CONFIG", "configs/data/banknifty.yaml"))
+    path = config["ingestion"]["bronze_path"]
+    df = pl.read_parquet(path)
+    report = validate_1m(
+        df,
+        holidays_path=config["ingestion"].get("holidays_path"),
+        require_complete_sessions=os.getenv("ALLOW_INCOMPLETE_SESSIONS", "0") != "1",
     )
 
-    if invalid_geometry.height > 0:
-        print(
-            f"FAILED GATE: Found {invalid_geometry.height} rows with invalid OHLC geometry (e.g. low > high)."
-        )
-        sys.exit(1)
-
-    # Gate 3: Negative prices or ranges
-    negative_prices = df.filter(
-        (pl.col("open") < 0)
-        | (pl.col("high") < 0)
-        | (pl.col("low") < 0)
-        | (pl.col("close") < 0)
+    Path("artifacts/validation").mkdir(parents=True, exist_ok=True)
+    Path("artifacts/validation/1m_report.json").write_text(
+        json.dumps(report.__dict__, indent=2, default=str) + "\n",
+        encoding="utf-8",
     )
-
-    if negative_prices.height > 0:
-        print(f"FAILED GATE: Found {negative_prices.height} rows with negative prices.")
-        sys.exit(1)
-
-    # Gate 4: Suspicious zero/stale candles (Volume = 0 or No Price Movement)
-    # (Just a warning for now, as illiquid minutes can exist)
-    zero_volume = df.filter(pl.col("volume") <= 0)
-    if zero_volume.height > 0:
-        print(f"WARNING: Found {zero_volume.height} rows with zero or negative volume.")
-
-    print("ALL DATA QUALITY GATES PASSED.")
+    print(report)
+    if not report.ok:
+        raise SystemExit("Canonical 1m data quality gates failed")
 
 
 if __name__ == "__main__":

@@ -1,26 +1,38 @@
+from __future__ import annotations
+
 import os
 
 import polars as pl
 
-from src.labels.triple_barrier import apply_triple_barrier_labels
+from src.common.config import load_yaml
+from src.common.contracts import LabelConfig
+from src.labels.triple_barrier import add_path_statistics, apply_triple_barrier_labels
+from src.labels.timing import add_barrier_timing_features
 
 
-def run():
-    print("Running pipeline step: 05_labels.py")
+def run() -> None:
+    cfg = load_yaml(os.getenv("LABEL_CONFIG", "configs/labels/baseline.yaml"))
+    data_cfg = load_yaml(os.getenv("DATA_CONFIG", "configs/data/banknifty.yaml"))
+    features = pl.read_parquet("data/gold/features_v1.parquet")
+    one = pl.read_parquet(data_cfg["ingestion"]["bronze_path"])
 
-    try:
-        df_features = pl.read_parquet("data/silver/5m_features.parquet")
-    except FileNotFoundError:
-        print("Run 04_features.py first.")
-        return
-
-    df_labels = apply_triple_barrier_labels(
-        df_features, pt_sl_ratio=200.0 / 70.0, stop_loss_pts=70.0
+    label_cfg = LabelConfig(
+        target_points=float(cfg["target_points"]),
+        stop_points=float(cfg["stop_points"]),
+        horizon_bars=int(cfg["horizon_bars"]),
+        entry_delay_minutes=int(cfg.get("entry_delay_minutes", 1)),
     )
+    labeled = apply_triple_barrier_labels(features, one, label_cfg)
+    labeled = add_path_statistics(
+        labeled,
+        one,
+        horizon_bars=label_cfg.horizon_bars,
+    )
+    labeled = add_barrier_timing_features(labeled)
 
     os.makedirs("data/gold", exist_ok=True)
-    df_labels.write_parquet("data/gold/dataset_v1.parquet")
-    print(f"Labels applied. Shape: {df_labels.shape}")
+    labeled.write_parquet("data/gold/dataset_v1.parquet", compression="zstd")
+    print(f"Labeled dataset: {labeled.height} rows")
 
 
 if __name__ == "__main__":

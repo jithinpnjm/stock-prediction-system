@@ -1,58 +1,37 @@
-import sys
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
 
 import mlflow
-from mlflow.tracking import MlflowClient
 
 
-def run():
-    print("Running pipeline step: 11_register_model.py")
+def run() -> None:
+    if os.getenv("ALLOW_MODEL_REGISTRATION") != "1":
+        raise SystemExit(
+            "Registration is intentionally disabled. Set ALLOW_MODEL_REGISTRATION=1 "
+            "only after the research/holdout gates are approved."
+        )
+    report = json.loads(Path("artifacts/validation/report.json").read_text())
+    if not report.get("holdout_evaluated"):
+        raise SystemExit("Refusing registration without a frozen-holdout evaluation")
 
-    mlflow.set_experiment("BankNifty_Baseline_LGBM")
-    client = MlflowClient()
-
-    # Get the latest run
-    experiment = client.get_experiment_by_name("BankNifty_Baseline_LGBM")
-    if not experiment:
-        print("ERROR: MLflow experiment not found. Run 07_train.py first.")
-        sys.exit(1)
-
-    runs = client.search_runs(
+    experiment = mlflow.get_experiment_by_name("BankNifty_Research")
+    if experiment is None:
+        raise SystemExit("MLflow experiment not found")
+    runs = mlflow.search_runs(
         experiment_ids=[experiment.experiment_id],
         order_by=["start_time DESC"],
         max_results=1,
     )
+    if runs.empty:
+        raise SystemExit("No MLflow run found")
 
-    if not runs:
-        print("ERROR: No runs found in experiment.")
-        sys.exit(1)
-
-    latest_run = runs[0]
-    run_id = latest_run.info.run_id
-    print(f"Found latest run_id: {run_id}")
-
-    # We will register the fold_1 model as the primary prototype for now
-    model_uri = f"runs:/{run_id}/model_fold_1"
-    model_name = "BankNifty_Prod_LGBM"
-
-    print(f"Registering model from {model_uri} as {model_name}...")
-
-    try:
-        registered_model = mlflow.register_model(model_uri=model_uri, name=model_name)
-        print(
-            f"Successfully registered model: {model_name} (Version: {registered_model.version})"
-        )
-
-        # Transition to production
-        print(
-            "Note: In a real production environment, you would use staging/production aliases."
-        )
-        client.set_registered_model_alias(
-            model_name, "champion", registered_model.version
-        )
-        print(f"Set model version {registered_model.version} as 'champion'.")
-
-    except Exception as e:
-        print(f"Failed to register model: {e}")
+    run_id = runs.iloc[0]["run_id"]
+    model_uri = f"runs:/{run_id}/artifacts/models/lgbm_dev.joblib"
+    registered = mlflow.register_model(model_uri, "BankNifty_LGBM")
+    print(f"Registered model version {registered.version}")
 
 
 if __name__ == "__main__":
