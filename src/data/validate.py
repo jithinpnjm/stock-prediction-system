@@ -3,7 +3,7 @@ from __future__ import annotations
 import polars as pl
 
 from .calendar import NSECalendar
-from .schemas import DataContract,validate_required_schema
+from .schemas import DataContract, validate_required_schema
 
 
 def _report(name,passed,count=0,details=""):
@@ -46,7 +46,7 @@ def validate_ohlcv(
 
     if session.is_empty():
         reports.append(_report("session_completeness",False,0,"no in-session rows"))
-        reports.append(_report("unexpected_intraday_gaps",False,0,"no in-session rows"))
+        reports.append(_report("unexpected_intraday_spacing",False,0,"no in-session rows"))
         reports.append(_report("stale_candle_diagnostic",True,0))
         return reports
 
@@ -55,13 +55,23 @@ def validate_ohlcv(
     expected=calendar.expected_minute_count()
     min_date=session.select(pl.col("timestamp").min().dt.date()).item()
     max_date=session.select(pl.col("timestamp").max().dt.date()).item()
+    cadence_errors=0
 
     for d in calendar.trading_days(min_date,max_date):
-        day=session.filter(pl.col("timestamp").dt.date()==d)
+        day=session.filter(pl.col("timestamp").dt.date()==d).sort("timestamp")
         if day.is_empty():
             missing_sessions.append(d.isoformat())
-        elif day.height!=expected:
+            continue
+
+        if day.height!=expected:
             bad_day_counts+=abs(expected-day.height)
+
+        if day.height>1:
+            cadence_errors+=int(
+                day.with_columns(
+                    pl.col("timestamp").diff().dt.total_seconds().alias("_delta")
+                ).filter(pl.col("_delta")!=60).height
+            )
 
     reports.append(_report(
         "session_completeness",
@@ -69,17 +79,12 @@ def validate_ohlcv(
         bad_day_counts,
         f"missing_sessions={missing_sessions}",
     ))
-
-    gap_count=0
-    for d in calendar.trading_days(min_date,max_date):
-        day=session.filter(pl.col("timestamp").dt.date()==d).sort("timestamp")
-        if day.height>1:
-            gap_count+=int(
-                day.with_columns(
-                    pl.col("timestamp").diff().dt.total_seconds().alias("_gap")
-                ).filter(pl.col("_gap")>60).height
-            )
-    reports.append(_report("unexpected_intraday_gaps",gap_count==0,gap_count))
+    reports.append(_report(
+        "unexpected_intraday_spacing",
+        cadence_errors==0,
+        cadence_errors,
+        "all consecutive in-session timestamps must be exactly 60 seconds apart",
+    ))
 
     stale=session.filter(
         (pl.col("open")==pl.col("high"))&

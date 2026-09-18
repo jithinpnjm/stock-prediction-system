@@ -19,8 +19,6 @@ def aggregate_1m_to_5m(
         local.dt.hour()*60+local.dt.minute()
         -(calendar.session_open.hour*60+calendar.session_open.minute)
     )
-    # Canonical 1m timestamps are candle-availability times: 09:16..15:30.
-    # 09:16..09:20 therefore map to the 09:20 5m close bucket.
     df=df.with_columns(
         (((session_minute-1)//5).cast(pl.Int32)).alias("_bucket"),
         pl.col("timestamp").dt.date().alias("_session_date"),
@@ -47,7 +45,7 @@ def aggregate_1m_to_5m(
     ])
 
 
-def validate_aggregation(df_5m:pl.DataFrame)->None:
+def validate_aggregation(df_5m:pl.DataFrame,calendar:NSECalendar|None=None)->None:
     if df_5m.is_empty():
         raise ValueError("5m dataset is empty")
     bad=df_5m.filter(
@@ -57,3 +55,18 @@ def validate_aggregation(df_5m:pl.DataFrame)->None:
     )
     if bad.height:
         raise ValueError(f"invalid 5m OHLC geometry: {bad.height}")
+    if calendar is None:
+        return
+    for d in df_5m.select(pl.col("timestamp").dt.date().unique()).to_series().to_list():
+        day=df_5m.filter(pl.col("timestamp").dt.date()==d).sort("timestamp")
+        if day.height!=75:
+            raise ValueError(f"{d}: expected 75 complete 5m bars, found {day.height}")
+        if day["timestamp"][0].strftime("%H:%M")!="09:20":
+            raise ValueError(f"{d}: first 5m availability timestamp must be 09:20")
+        if day["timestamp"][-1].strftime("%H:%M")!="15:30":
+            raise ValueError(f"{d}: last 5m availability timestamp must be 15:30")
+        deltas=day.with_columns(
+            pl.col("timestamp").diff().dt.total_seconds().alias("_d")
+        ).filter(pl.col("_d").is_not_null())
+        if deltas.filter(pl.col("_d")!=300).height:
+            raise ValueError(f"{d}: canonical 5m timestamps are not exactly 5 minutes apart")
