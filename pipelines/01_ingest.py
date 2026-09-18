@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
+from src.data.calendar import NSECalendar
 from src.data.exclusions import apply_known_exclusions
 from src.data.ingest import read_source
 from src.data.schemas import validate_required_schema
@@ -36,6 +37,13 @@ def run():
     df = df.filter(pl.col("source_timestamp").dt.date() < today_ist)
 
     df = apply_known_exclusions(df)
+
+    # Vendor feeds sometimes include a handful of pre-/post-market
+    # indicative ticks outside 09:15-15:30. These are not part of the
+    # canonical session by definition, so drop them here rather than
+    # let them fail whole-dataset validation downstream.
+    calendar = NSECalendar.from_yaml("configs/data/nse_holidays.yaml")
+    df = calendar.filter_session(df)
 
     out = Path(os.getenv("BRONZE_PATH", "data/bronze/validated_1m.parquet"))
     out.parent.mkdir(parents=True, exist_ok=True)
