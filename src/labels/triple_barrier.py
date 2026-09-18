@@ -1,71 +1,166 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 import numpy as np
 import polars as pl
-from numba import njit
+
+from src.common.contracts import BarrierType, MARKET_TIMEZONE, SESSION_CLOSE, LabelConfig
 
 
-@njit
-def _compute_barriers(
-    close: np.ndarray,
+def _session_close(ts: datetime) -> datetime:
+    local = ts.astimezone(ZoneInfo(MARKET_TIMEZONE))
+    return local.replace(
+        hour=SESSION_CLOSE.hour,
+        minute=SESSION_CLOSE.minute,
+        second=0,
+        microsecond=0,
+    )
+
+
+def _first_touch(
+    *,
+    entry: float,
     high: np.ndarray,
     low: np.ndarray,
-    target_pts: float,
-    stop_pts: float,
-    time_barrier: int,
-):
-    """
-    Numba JIT compiled exact path traversal logic for triple barrier labels.
-    Resolves targets intrabar with defensive collision handling (stop assumed hit first).
-    """
-    n = len(close)
-    labels = np.zeros(n, dtype=np.int32)
-
-    for i in range(n):
-        c_price = close[i]
-        upper_barrier = c_price + target_pts
-        lower_barrier = c_price - stop_pts
-
-        hit_target = False
-        hit_stop = False
-
-        for j in range(i + 1, min(i + 1 + time_barrier, n)):
-            if high[j] >= upper_barrier and low[j] <= lower_barrier:
-                # Intrabar collision: Without strictly timestamped tick data, assume defensive stop loss hit.
-                hit_stop = True
-                break
-            elif high[j] >= upper_barrier:
-                hit_target = True
-                break
-            elif low[j] <= lower_barrier:
-                hit_stop = True
-                break
-
-        if hit_target:
-            labels[i] = 1
-        elif hit_stop:
-            labels[i] = -1
-        else:
-            labels[i] = 0
-
-    return labels
+    timestamps: np.ndarray,
+    target: float,
+    stop: float,
+) -> tuple[str, object]:
+    target_hit: int | None = None
+    stop_hit: int | None = None
+    for j in range(len(high)):
+        target_j = high[j] >= target if target > entry else low[j] <= target
+        stop_j = low[j] <= stop if stop < entry else high[j] >= stop
+        if target_j:
+            target_hit = j
+        if stop_j:
+            stop_hit = j
+        if target_hit is not None or stop_hit is not None:
+            if target_hit is not None and stop_hit is not None and target_hit == stop_hit:
+                return BarrierType.AMBIGUOUS.value, timestamps[j]
+            if target_hit is not None and (stop_hit is None or target_hit < stop_hit):
+                return BarrierType.LONG_TARGET.value if target > entry else BarrierType.SHORT_TARGET.value, timestamps[target_hit]
+            return BarrierType.LONG_STOP.value if stop < entry else BarrierType.SHORT_STOP.value, timestamps[stop_hit]
+    return BarrierType.TIME.value, timestamps[-1] if len(timestamps) else None
 
 
 def apply_triple_barrier_labels(
-    df: pl.DataFrame,
-    pt_sl_ratio: float = 200.0 / 70.0,
-    stop_loss_pts: float = 70.0,
-    time_barrier_bars: int = 75,
+    events: pl.DataFrame,
+    one_minute: pl.DataFrame,
+    config: LabelConfig | None = None,
 ) -> pl.DataFrame:
-    """
-    Applies the triple barrier labeling method rigorously scanning forward price history.
-    """
-    target_pts = stop_loss_pts * pt_sl_ratio
+    config = config or LabelConfig()
+    if events.is_empty() or one_minute.is_empty():
+        raise ValueError("Both events and one-minute data are required")
 
-    close_arr = df["close"].to_numpy()
-    high_arr = df["high"].to_numpy()
-    low_arr = df["low"].to_numpy()
+    one = one_minute.sort("timestamp")
+    one_ts = np.array(one.get_column("timestamp").to_list(), dtype=object)
+    one_high = one.get_column("high").to_numpy()
+    one_low = one.get_column("low").to_numpy()
 
-    labels = _compute_barriers(
-        close_arr, high_arr, low_arr, target_pts, stop_loss_pts, time_barrier_bars
-    )
+    result: list[dict[str, object]] = []
+    event_ts = events.get_column("timestamp").to_list()
+    close = events.get_column("close").to_numpy()
 
-    return df.with_columns(pl.Series("label", labels, dtype=pl.Int32))
+    for i, start in enumerate(event_ts):
+        entry_time = start + timedelta(minutes=config.entry_delay_minutes)
+        expiry = min(
+            entry_time + timedelta(minutes=5 * config.horizon_bars),
+            _session_close(entry_time),
+        )
+        left = int(np.searchsorted(one_ts, entry_time, side="right"))
+        right = int(np.searchsorted(one_ts, expiry, side="right"))
+
+        if right <= left:
+            result.append(
+                {
+                    "event_start": start,
+                    "event_end": expiry,
+                    "entry_time": entry_time,
+                    "label": 0,
+                    "barrier_type": BarrierType.TIME.value,
+                    "barrier_time": None,
+                    "path_complete": False,
+                    "long_outcome": 0,
+                    "short_outcome": 0,
+                }
+            )
+            continue
+
+        h = one_high[left:right]
+        l = one_low[left:right]
+        t = one_ts[left:right]
+        entry = float(close[i])
+
+        long_type, long_time = _first_touch(
+            entry=entry,
+            high=h,
+            low=l,
+            timestamps=t,
+            target=entry + config.target_points,
+            stop=entry - config.stop_points,
+        )
+        short_type, short_time = _first_touch(
+            entry=entry,
+            high=h,
+            low=l,
+            timestamps=t,
+            target=entry - config.target_points,
+            stop=entry + config.stop_points,
+        )
+
+        # Directional event label: only a clean target-first result becomes a
+        # directional class. Any stop, timeout, or intrabar ambiguity is 0.
+        first_candidates = []
+        if long_type == BarrierType.LONG_TARGET.value:
+            first_candidates.append((long_time, 1, long_type))
+        if short_type == BarrierType.SHORT_TARGET.value:
+            first_candidates.append((short_time, -1, short_type))
+
+        if not first_candidates:
+            label = 0
+            barrier_type = (
+                BarrierType.AMBIGUOUS.value
+                if long_type == BarrierType.AMBIGUOUS.value or short_type == BarrierType.AMBIGUOUS.value
+                else BarrierType.TIME.value
+                if long_type == BarrierType.TIME.value and short_type == BarrierType.TIME.value
+                else long_type if long_type in (BarrierType.LONG_STOP.value,) else short_type
+            )
+            barrier_time = long_time if long_type != BarrierType.TIME.value else short_time
+        else:
+            first_time, label, barrier_type = min(
+                first_candidates, key=lambda x: x[0]
+            )
+            barrier_time = first_time
+
+        long_outcome = 1 if long_type == BarrierType.LONG_TARGET.value else -1 if long_type == BarrierType.LONG_STOP.value else 0
+        short_outcome = 1 if short_type == BarrierType.SHORT_TARGET.value else -1 if short_type == BarrierType.SHORT_STOP.value else 0
+
+        result.append(
+            {
+                "event_start": start,
+                "event_end": expiry,
+                "entry_time": entry_time,
+                "label": label,
+                "barrier_type": barrier_type,
+                "barrier_time": barrier_time,
+                "path_complete": right < len(one_ts) and one_ts[right - 1] >= expiry - timedelta(minutes=1),
+                "long_outcome": long_outcome,
+                "short_outcome": short_outcome,
+            }
+        )
+
+    labels = pl.DataFrame(result)
+    return events.join(labels, left_on="timestamp", right_on="event_start", how="left").drop("event_start")
+
+
+def add_path_statistics(
+    labeled: pl.DataFrame,
+    one_minute: pl.DataFrame,
+    *,
+    horizon_bars: int = 75,
+) -> pl.DataFrame:
+    out = compute_mfe_mae(labeled, one_minute, horizon_bars=horizon_bars, direction=1)
+    return compute_mfe_mae(out, one_minute, horizon_bars=horizon_bars, direction=-1)
