@@ -92,8 +92,23 @@ class NSECalendar:
         )
 
     def _session_minutes(self, df: pl.DataFrame, timestamp_col: str) -> pl.Expr:
-        local = self._local_timestamp(df, timestamp_col)
-        return local.dt.hour() * 60 + local.dt.minute()
+        """Return market-local HH:MM as minutes since midnight.
+
+        Keep the timezone-aware expression intact through conversion. In
+        particular, do not strip timezone metadata before extracting the clock;
+        that can cause Polars versions to reinterpret the instant in UTC.
+        """
+        dtype = df[timestamp_col].dtype
+        source_timezone = getattr(dtype, "time_zone", None)
+        local = pl.col(timestamp_col)
+        if source_timezone:
+            local = local.dt.convert_time_zone(self.timezone)
+        else:
+            local = local.cast(pl.Datetime(time_zone=None), strict=False)
+        return (
+            local.dt.strftime("%H").cast(pl.Int32) * 60
+            + local.dt.strftime("%M").cast(pl.Int32)
+        )
 
     def filter_session(
         self,
