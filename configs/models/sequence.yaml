@@ -7,3 +7,4 @@ patience: 8
 device: auto
 embargo_bars: 75
 min_train_rows: 500
+clip_z: 8.0

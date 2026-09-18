@@ -7,7 +7,7 @@ import numpy as np
 import polars as pl
 import torch
 import yaml
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler
 
 from src.mlops.lineage import Lineage
 from src.mlops.mlflow_utils import log_lineage, log_resolved_config
@@ -158,14 +158,21 @@ def run(model_family: str = "tcn"):
                 continue
             n_folds_used += 1
 
-            # Standardize per feature, fit on this fold's training
-            # split only, so raw-scale features don't blow up the
-            # network's activations/loss the way they can for tree
-            # models -- and so no information from a later fold's
-            # validation period leaks into an earlier fold's scaling.
-            scaler = StandardScaler().fit(batch.X[train_idx].reshape(-1, n_features))
+            # Scale per feature (median/IQR, fit on this fold's training
+            # split only so no information from a later fold's
+            # validation period leaks into an earlier fold's scaling),
+            # then clip. Extreme-event days (budget day, the 2024
+            # election-result crash, etc.) have ATR/range/return values
+            # far outside any "normal" trading day, which previously
+            # meant the model's rare highest-confidence predictions
+            # were mostly just "this input is unlike anything in
+            # training" rather than a recognized, validated pattern.
+            # Robust scaling + clipping keeps those days from
+            # dominating what the network attends to.
+            clip_z = float(cfg.get("clip_z", 8.0))
+            scaler = RobustScaler().fit(batch.X[train_idx].reshape(-1, n_features))
             scaled_X = (
-                scaler.transform(batch.X.reshape(-1, n_features))
+                np.clip(scaler.transform(batch.X.reshape(-1, n_features)), -clip_z, clip_z)
                 .reshape(batch.X.shape)
                 .astype(np.float32)
             )
