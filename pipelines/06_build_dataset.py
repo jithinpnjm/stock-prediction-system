@@ -54,11 +54,11 @@ def run():
     if usable.is_empty():
         raise ValueError("No rows remain after enforcing feature availability")
 
+    Path("data/ml").mkdir(parents=True, exist_ok=True)
     usable.select(
         ["timestamp", "event_end_timestamp", "label", *feature_columns]
     ).write_parquet("data/ml/training_dataset.parquet")
 
-    Path("data/ml").mkdir(parents=True, exist_ok=True)
     Path("data/ml/feature_schema.json").write_text(
         json.dumps(
             {
