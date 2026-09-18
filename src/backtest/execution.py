@@ -1,68 +1,55 @@
-from src.backtest.portfolio import Portfolio, Trade
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ExecutionCosts:
+    spread_points: float = 0.0
+    slippage_points: float = 0.0
+    commission_per_order: float = 20.0
+    transaction_cost_bps: float = 0.0
 
 
 class ExecutionHandler:
-    def __init__(
-        self, portfolio: Portfolio, slippage: float = 2.0, commission: float = 20.0
-    ):
+    def __init__(self, portfolio, costs: ExecutionCosts):
         self.portfolio = portfolio
-        self.slippage = slippage  # Points slippage per trade
-        self.commission = commission  # Flat fee per trade
+        self.costs = costs
 
-    def execute_trade(self, time: str, price: float, signal: int, size: float = 15.0):
-        """
-        Executes trades based on signals.
-        signal: 1 (Buy/Long), -1 (Sell/Short), 0 (Close Position)
-        size: Lot size (e.g., BankNifty lot is usually 15)
-        """
-        # If we already have a position and the signal changes or goes flat, close it
-        if self.portfolio.position != 0 and (
-            signal != self.portfolio.position or signal == 0
-        ):
-            self._close_position(time, price)
+    def _fill_price(self, market_price: float, direction: int) -> float:
+        impact = self.costs.spread_points / 2.0 + self.costs.slippage_points
+        return float(market_price) + direction * impact
 
-        # If we have no position and there is an active directional signal, open it
-        if self.portfolio.position == 0 and signal in [1, -1]:
-            self._open_position(time, price, signal, size)
+    def _order_cost(self, market_price: float, units: float, point_value: float) -> float:
+        notional = abs(float(market_price) * units * point_value)
+        variable = notional * self.costs.transaction_cost_bps / 10_000.0
+        return self.costs.commission_per_order + variable
 
-    def _open_position(self, time: str, price: float, direction: int, size: float):
-        execution_price = price + (self.slippage * direction)
+    def execute(
+        self,
+        *,
+        time,
+        market_price: float,
+        target_direction: int,
+        units: float,
+    ) -> None:
+        if target_direction not in (-1, 0, 1):
+            raise ValueError("target_direction must be -1, 0 or 1")
 
-        self.portfolio.position = direction
-        self.portfolio.position_size = size
-        self.portfolio.entry_price = execution_price
-        self.portfolio.entry_time = time
+        current = self.portfolio.direction
+        if current == target_direction:
+            return
 
-        # Deduct commission
-        self.portfolio.cash -= self.commission
+        if current != 0:
+            close_price = self._fill_price(market_price, -current)
+            close_cost = self._order_cost(
+                close_price, self.portfolio.units, self.portfolio.point_value
+            )
+            self.portfolio.close(time, close_price, close_cost)
 
-    def _close_position(self, time: str, price: float):
-        direction = self.portfolio.position
-        execution_price = price - (self.slippage * direction)
-
-        # Calculate PnL
-        price_diff = (execution_price - self.portfolio.entry_price) * direction
-        pnl = (price_diff * self.portfolio.position_size) - self.commission
-
-        self.portfolio.cash += (
-            self.portfolio.entry_price * self.portfolio.position_size * direction
-        )  # free up margin (mocked)
-        self.portfolio.cash += pnl
-
-        # Record trade
-        trade = Trade(
-            entry_time=self.portfolio.entry_time,
-            entry_price=self.portfolio.entry_price,
-            direction=direction,
-            size=self.portfolio.position_size,
-            exit_time=time,
-            exit_price=execution_price,
-            pnl=pnl,
-        )
-        self.portfolio.trade_history.append(trade)
-
-        # Reset position
-        self.portfolio.position = 0
-        self.portfolio.position_size = 0.0
-        self.portfolio.entry_price = 0.0
-        self.portfolio.entry_time = None
+        if target_direction != 0:
+            open_price = self._fill_price(market_price, target_direction)
+            open_cost = self._order_cost(
+                open_price, units, self.portfolio.point_value
+            )
+            self.portfolio.open(time, open_price, target_direction, units, open_cost)

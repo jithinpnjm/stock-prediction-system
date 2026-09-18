@@ -1,40 +1,81 @@
+from __future__ import annotations
+
+from collections import deque
+
 import polars as pl
 
-from src.backtest.execution import ExecutionHandler
+from src.backtest.execution import ExecutionCosts, ExecutionHandler
 from src.backtest.portfolio import Portfolio
 
 
 class EventDrivenBacktester:
-    def __init__(self, df: pl.DataFrame, initial_capital: float = 100000.0):
-        """
-        df must contain: 'datetime', 'close', and 'signal'
-        """
-        self.df = df
-        self.portfolio = Portfolio(initial_capital)
-        self.execution = ExecutionHandler(self.portfolio)
-        self.equity_curve = []
+    def __init__(
+        self,
+        df: pl.DataFrame,
+        *,
+        initial_capital: float = 100_000.0,
+        units: float = 1.0,
+        point_value: float = 1.0,
+        latency_bars: int = 1,
+        execution_price_column: str = "open",
+        costs: ExecutionCosts | None = None,
+    ):
+        required = {"timestamp", "open", "high", "low", "close", "signal"}
+        missing = required - set(df.columns)
+        if missing:
+            raise ValueError(f"Missing backtest columns: {sorted(missing)}")
+        if latency_bars < 0:
+            raise ValueError("latency_bars cannot be negative")
+        if execution_price_column not in {"open", "close"}:
+            raise ValueError("execution_price_column must be open or close")
+        self.df = df.sort("timestamp")
+        self.units = float(units)
+        self.latency_bars = latency_bars
+        self.execution_price_column = execution_price_column
+        self.portfolio = Portfolio(initial_capital, point_value=point_value)
+        self.execution = ExecutionHandler(
+            self.portfolio, costs or ExecutionCosts()
+        )
 
-    def run(self):
-        # Event Loop
-        for row in self.df.iter_rows(named=True):
-            dt = str(row["datetime"])
-            price = row["close"]
-            signal = row.get("signal", 0)
+    def run(self) -> tuple[pl.DataFrame, list]:
+        rows = self.df.to_dicts()
+        pending: deque[tuple[int, int]] = deque()
+        equity = []
 
-            # 1. Execute trades based on signal
-            self.execution.execute_trade(dt, price, signal)
+        for i, row in enumerate(rows):
+            signal = int(row["signal"])
+            execute_at = i + self.latency_bars
+            if execute_at < len(rows):
+                pending.append((execute_at, signal))
 
-            # 2. Mark to Market
-            current_equity = self.portfolio.update_portfolio(price)
+            while pending and pending[0][0] == i:
+                _, target = pending.popleft()
+                market_price = float(row[self.execution_price_column])
+                self.execution.execute(
+                    time=row["timestamp"],
+                    market_price=market_price,
+                    target_direction=target,
+                    units=self.units,
+                )
 
-            # 3. Record Equity Curve
-            self.equity_curve.append({"datetime": dt, "equity": current_equity})
-
-        # Close any open positions at the end of the backtest
-        last_row = self.df.row(-1, named=True)
-        if self.portfolio.position != 0:
-            self.execution.execute_trade(
-                str(last_row["datetime"]), last_row["close"], 0
+            equity.append(
+                {
+                    "timestamp": row["timestamp"],
+                    "equity": self.portfolio.mark_to_market(float(row["close"])),
+                    "position": self.portfolio.direction,
+                    "units": self.portfolio.units,
+                }
             )
 
-        return pl.DataFrame(self.equity_curve), self.portfolio.trade_history
+        if rows and self.portfolio.direction:
+            row = rows[-1]
+            market_price = float(row["close"])
+            self.execution.execute(
+                time=row["timestamp"],
+                market_price=market_price,
+                target_direction=0,
+                units=self.units,
+            )
+            equity[-1]["equity"] = self.portfolio.mark_to_market(market_price)
+
+        return pl.DataFrame(equity), self.portfolio.trade_history
