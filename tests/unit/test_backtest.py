@@ -36,7 +36,7 @@ def test_backtest_respects_signal_to_next_1m_source_execution():
     )
     config = BacktestConfig(
         initial_capital=1000.0,
-        target_points=2.0,
+        target_points=1.0,
         stop_points=70.0,
         entry_start="09:30",
         entry_end="15:00",
@@ -56,4 +56,4 @@ def test_backtest_respects_signal_to_next_1m_source_execution():
     assert trades[0].signal_time == signal_time
     assert trades[0].exit_time == availability[1]
     assert trades[0].exit_reason == "target"
-    assert equity["equity"][-1] == 1002.0
+    assert equity["equity"][-1] == 1001.0
