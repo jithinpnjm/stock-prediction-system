@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-import yaml
+from pathlib import Path
+
 import polars as pl
+import yaml
 
 from src.features.candles import add_candle_geometry_features
 from src.features.clusters import add_candle_cluster_features
 from src.features.event_sampling import add_event_sampling_features
 from src.features.market_structure import add_market_structure_features
+from src.features.microstructure import add_1m_inside_5m_features
+from src.features.multitimeframe import add_multi_timeframe_features
 from src.features.opening_range import add_opening_range_features
 from src.features.session_context import add_session_context_features
 from src.features.support_resistance import add_support_resistance_features
@@ -16,18 +20,34 @@ from src.features.volatility import add_volatility_features
 
 
 def run():
-    cfg=yaml.safe_load(open("configs/features/default.yaml"))
-    df=pl.read_parquet("data/silver/5m_canonical.parquet")
-    df=add_candle_geometry_features(df)
+    cfg=yaml.safe_load(Path("configs/features/default.yaml").read_text())
+    df5=pl.read_parquet("data/silver/5m_canonical.parquet")
+    source_1m=pl.read_parquet("data/bronze/validated_1m.parquet")
+
+    df=add_candle_geometry_features(df5)
     df=add_time_features(df)
     df=add_session_context_features(df)
     df=add_candle_cluster_features(df,int(cfg["cluster_max_bars"]))
     df=add_volatility_features(df,tuple(cfg["atr_periods"]))
+    df=add_multi_timeframe_features(df,tuple(cfg["multi_timeframes"]))
     df=add_swing_features(df,int(cfg["swing_lookback"]))
     df=add_support_resistance_features(df,int(cfg["support_resistance_lookback"]))
     df=add_market_structure_features(df)
     df=add_opening_range_features(df,tuple(cfg["opening_range_windows"]))
+    df=add_1m_inside_5m_features(source_1m,df)
     df=add_event_sampling_features(df,float(cfg["cusum_threshold_multiple"]))
+
+    # Experimental transforms are opt-in. They are never part of the baseline
+    # feature set unless the experiment configuration explicitly enables them.
+    if bool(cfg.get("enable_fractional_diff",False)):
+        from src.features.fractional_diff import add_fractional_diff_feature
+        df=add_fractional_diff_feature(
+            df,
+            d=float(cfg.get("fractional_diff_d",0.4)),
+            threshold=float(cfg.get("fractional_diff_threshold",1e-5)),
+            max_lags=int(cfg.get("fractional_diff_max_lags",200)),
+        )
+
     df.write_parquet("data/silver/5m_features.parquet")
     print(f"feature dataset: {df.shape}")
 
