@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -8,10 +9,10 @@ from zoneinfo import ZoneInfo
 import polars as pl
 
 from src.common.contracts import (
+    EXPECTED_1M_BARS,
     MARKET_TIMEZONE,
     SESSION_CLOSE,
     SESSION_OPEN,
-    EXPECTED_1M_BARS,
 )
 
 IST = ZoneInfo(MARKET_TIMEZONE)
@@ -54,6 +55,32 @@ def load_holidays(
     }
 
 
+def load_closed_days(
+    path: str | Path | None = None,
+) -> set[date]:
+    if path is None:
+        return set()
+
+    closed_path = Path(path)
+    if not closed_path.exists():
+        return set()
+
+    if closed_path.suffix.lower() == ".json":
+        payload = json.loads(
+            closed_path.read_text(encoding="utf-8")
+        )
+        if not isinstance(payload, list):
+            raise ValueError(
+                f"Closed-day JSON {closed_path} must contain a list"
+            )
+        return {
+            date.fromisoformat(str(value))
+            for value in payload
+        }
+
+    return load_holidays(closed_path)
+
+
 def load_session_overrides(
     path: str | Path | None = None,
 ) -> dict[date, SessionSpec]:
@@ -79,10 +106,12 @@ def load_session_overrides(
 
     overrides: dict[date, SessionSpec] = {}
     for row in frame.to_dicts():
-        if not row["date"]:
+        if not str(row["date"]).strip():
             continue
-
-        overrides[date.fromisoformat(str(row["date"]))] = SessionSpec(
+        session = date.fromisoformat(
+            str(row["date"])
+        )
+        overrides[session] = SessionSpec(
             session_open=time.fromisoformat(
                 str(row["session_open"])
             ),
@@ -93,7 +122,6 @@ def load_session_overrides(
                 row["expected_1m_bars"]
             ),
         )
-
     return overrides
 
 
@@ -111,11 +139,14 @@ def is_trading_day(
     value: date,
     holidays: set[date] | None = None,
     overrides: dict[date, SessionSpec] | None = None,
+    closed_days: set[date] | None = None,
 ) -> bool:
     if value in (overrides or {}):
         return True
-    return value.weekday() < 5 and value not in (
-        holidays or set()
+    return (
+        value.weekday() < 5
+        and value not in (holidays or set())
+        and value not in (closed_days or set())
     )
 
 
@@ -123,7 +154,10 @@ def session_open(
     session_date: date,
     overrides: dict[date, SessionSpec] | None = None,
 ) -> datetime:
-    spec = get_session_spec(session_date, overrides)
+    spec = get_session_spec(
+        session_date,
+        overrides,
+    )
     return datetime.combine(
         session_date,
         spec.session_open,
@@ -135,7 +169,10 @@ def session_close(
     session_date: date,
     overrides: dict[date, SessionSpec] | None = None,
 ) -> datetime:
-    spec = get_session_spec(session_date, overrides)
+    spec = get_session_spec(
+        session_date,
+        overrides,
+    )
     return datetime.combine(
         session_date,
         spec.session_close,
@@ -156,9 +193,7 @@ def expected_1m_timestamps(
         overrides,
     )
     out: list[datetime] = []
-
     while current < end:
         out.append(current)
         current += timedelta(minutes=1)
-
     return out
