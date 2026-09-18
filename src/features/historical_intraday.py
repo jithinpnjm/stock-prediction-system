@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict,deque
-
 import numpy as np
 import polars as pl
 
@@ -20,36 +19,34 @@ def add_historical_intraday_context(
     dates=out["timestamp"].dt.date().to_list()
     slots=out["f_session_bar_index"].to_numpy()
     close=out["close"].to_numpy()
+
     values=np.full(len(out),np.nan,dtype=float)
     stds=np.full(len(out),np.nan,dtype=float)
     rates=np.full(len(out),np.nan,dtype=float)
-
-    history:dict[int,deque[float]]=defaultdict(lambda:deque(maxlen=lookback_days))
-    last_date=None
-    # Compute one observation per slot/day from the close sequence. Each row
-    # uses only values from earlier trading dates, never the current day.
-    for i,(d,slot) in enumerate(zip(dates,slots,strict=False)):
-        if last_date is not None and d!=last_date:
-            pass
-        if i>0 and d!=dates[i-1]:
-            # The deque is updated only after the last row of each session.
-            pass
-
-    per_day_slot:dict[tuple[object,int],float]={}
-    previous_date=None
+    history:dict[int,deque[float]]=defaultdict(
+        lambda:deque(maxlen=lookback_days)
+    )
     current_slots:dict[int,float]={}
-    for i,(d,slot) in enumerate(zip(dates,slots,strict=False)):
+    previous_date=None
+
+    for i,(d,slot_value) in enumerate(zip(dates,slots,strict=False)):
         if previous_date is not None and d!=previous_date:
-            for s,v in current_slots.items():
-                history[s].append(v)
+            for slot, value in current_slots.items():
+                history[slot].append(value)
             current_slots={}
-        slot=int(slot)
-        current_return=float(close[i]/close[i-1]-1.0) if i>0 and d==dates[i-1] else float("nan")
+
+        slot=int(slot_value)
+        if i>0 and d==dates[i-1]:
+            current_return=float(close[i]/close[i-1]-1.0)
+        else:
+            current_return=float("nan")
+
         prior=list(history[slot])
         if prior:
             values[i]=float(np.mean(prior))
             stds[i]=float(np.std(prior,ddof=1)) if len(prior)>1 else 0.0
             rates[i]=float(np.mean(np.asarray(prior)>0))
+
         current_slots[slot]=current_return
         previous_date=d
 
