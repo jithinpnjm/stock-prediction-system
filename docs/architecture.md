@@ -1,49 +1,18 @@
 # Architecture
 
-## Canonical flow
+The platform is an event-prediction research system, not a generic next-candle forecaster.
 
-Fyers 1m source
--> immutable raw session files
--> normalized Bronze 1m
--> validated Bronze
--> canonical Silver 5m
--> point-in-time Gold features
--> path-aware labels
--> training frame
--> OOF model predictions
--> calibrated decision layer
--> execution-aware backtest
--> frozen holdout
--> shadow/paper trading
--> production candidate
+## Data flow
 
-## Time semantics
+1. Fyers 1-minute Bank Nifty SPOT source.
+2. Immutable raw snapshots under data/raw.
+3. Validated 1-minute bronze dataset.
+4. Session-contained close-timestamped 5-minute canonical dataset.
+5. Causal price-action, session, structure and volatility features.
+6. 1-minute-path-aware triple-barrier outcomes plus MFE/MAE.
+7. Trainable datasets with event intervals.
+8. Purged walk-forward models produce OOF predictions.
+9. Calibrated/abstaining decisions feed the execution-aware backtester.
+10. MLflow records experiment lineage; DVC records data lineage.
 
-Fyers source timestamps are treated as bar-start timestamps. The 5m layer emits a
-close timestamp:
-
-09:15-09:19 -> 09:20
-09:20-09:24 -> 09:25
-...
-15:25-15:29 -> 15:30
-
-All feature availability is defined at the close timestamp. No feature may read
-future rows, centered windows, future labels, or post-event information.
-
-## Data ownership
-
-Git stores source code, configuration, schemas, tests and documentation.
-DVC stores datasets and reproducible dataset stages.
-MLflow stores experiment runs, parameters, metrics and model artifacts.
-
-Raw data is immutable: a new vendor download creates new session files rather than
-rewriting historical raw observations.
-
-## Modeling strategy
-
-Baselines are intentionally simple: logistic regression, LightGBM, XGBoost/CatBoost.
-Sequence models (TCN and causal Transformer) are research candidates rather than
-automatic production replacements.
-
-The decision layer consumes probabilities and may return NO_TRADE. Trade selection
-is evaluated on OOF predictions and a separately protected frozen holdout.
+All model decisions must be keyed by timestamp, never by row position.

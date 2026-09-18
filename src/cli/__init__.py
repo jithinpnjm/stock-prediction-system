@@ -1,1 +1,1 @@
-"""Command-line entrypoints for reproducible research workflows."""
+"""Command-line entry points."""

@@ -4,42 +4,81 @@ import polars as pl
 
 
 def add_1m_inside_5m_features(
-    one_minute: pl.DataFrame, five_minute: pl.DataFrame
+    df_1m: pl.DataFrame,
+    df_5m: pl.DataFrame,
 ) -> pl.DataFrame:
-    # five_minute.timestamp is close time; 1m timestamp is start time.
-    m = one_minute.with_columns(
-        [
-            pl.col("timestamp").dt.truncate("5m").alias("_bucket_start"),
-            pl.col("close").diff().alias("_minute_delta"),
-        ]
-    )
-    f = five_minute.with_columns(
+    one = df_1m.sort("timestamp").with_columns(
+        pl.col("timestamp").dt.date().alias("_date"),
         (
-            pl.col("timestamp") - pl.duration(minutes=5)
-        ).alias("_bucket_start")
+            pl.col("timestamp").dt.hour() * 60 + pl.col("timestamp").dt.minute()
+        ).alias("_minute"),
+        (pl.col("close") > pl.col("open")).cast(pl.Int8).alias("_up"),
+        (pl.col("close") < pl.col("open")).cast(pl.Int8).alias("_down"),
+        (pl.col("high") - pl.col("low")).alias("_range"),
     )
-
-    agg = m.group_by("_bucket_start").agg(
-        [
-            pl.len().alias("minute_count"),
-            pl.col("_minute_delta").abs().sum().alias("path_abs_move"),
-            pl.col("_minute_delta").std().alias("minute_return_std"),
-            (pl.col("close").last() - pl.col("close").first()).alias("first_last_move"),
-            (pl.col("high").max() - pl.col("low").min()).alias("intrabar_range"),
-            (pl.col("close").filter(pl.col("_minute_delta") > 0).count()).alias("up_minutes"),
-            (pl.col("close").filter(pl.col("_minute_delta") < 0).count()).alias("down_minutes"),
-            pl.col("volume").sum().alias("minute_volume"),
-        ]
+    five = df_5m.sort("timestamp").with_columns(
+        pl.col("timestamp").dt.date().alias("_date"),
+        (
+            pl.col("timestamp").dt.hour() * 60 + pl.col("timestamp").dt.minute()
+        ).alias("_close_minute"),
     )
-    return f.join(agg, on="_bucket_start", how="left").drop("_bucket_start").with_columns(
-        [
+    summary = (
+        five.join(
+            one.select(
+                [
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "_date",
+                    "_minute",
+                    "_up",
+                    "_down",
+                    "_range",
+                ]
+            ),
+            on="_date",
+            how="left",
+        )
+        .filter(
+            (pl.col("_minute") <= pl.col("_close_minute"))
+            & (pl.col("_minute") > pl.col("_close_minute") - 5)
+        )
+        .group_by("timestamp")
+        .agg(
+            pl.col("high").max().alias("f_1m_path_high"),
+            pl.col("low").min().alias("f_1m_path_low"),
+            pl.col("open").first().alias("_first_1m_open"),
+            pl.col("close").last().alias("_last_1m_close"),
+            pl.col("volume").sum().alias("f_1m_path_volume"),
+            pl.col("_range").sum().alias("f_1m_range_sum"),
+            pl.col("_range").mean().alias("f_1m_range_mean"),
+            pl.col("_range").std().alias("f_1m_range_std"),
+            pl.col("_up").sum().alias("f_1m_up_count"),
+            pl.col("_down").sum().alias("f_1m_down_count"),
+            pl.len().alias("f_1m_count"),
+        )
+        .with_columns(
             (
-                pl.col("up_minutes")
-                / (pl.col("minute_count").clip(lower_bound=1))
-            ).alias("up_minute_ratio"),
+                pl.col("_last_1m_close") - pl.col("_first_1m_open")
+            ).alias("f_1m_path_net_move"),
             (
-                pl.col("path_abs_move")
-                / (pl.col("intrabar_range").abs() + 1e-9)
-            ).alias("path_efficiency"),
-        ]
+                pl.col("f_1m_path_high") - pl.col("f_1m_path_low")
+            ).alias("f_1m_path_range"),
+            (
+                pl.col("f_1m_path_high") - pl.col("_last_1m_close")
+            ).alias("f_1m_path_high_rejection"),
+            (
+                pl.col("_last_1m_close") - pl.col("f_1m_path_low")
+            ).alias("f_1m_path_low_rebound"),
+            (
+                pl.col("f_1m_up_count") / (pl.col("f_1m_count") + 1e-9)
+            ).alias("f_1m_up_ratio"),
+        )
+        .drop(["_first_1m_open", "_last_1m_close"])
+    )
+    return five.join(summary, on="timestamp", how="left").drop(
+        ["_date", "_close_minute"]
     )

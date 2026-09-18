@@ -1,1 +1,1 @@
-"""Point-in-time feature engineering."""
+"""Causal Bank Nifty price-action feature engine."""

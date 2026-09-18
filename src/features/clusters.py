@@ -3,23 +3,29 @@ from __future__ import annotations
 import polars as pl
 
 
-def add_consecutive_cluster_features(df: pl.DataFrame, max_length: int = 10) -> pl.DataFrame:
-    reset = (
-        (pl.col("session_date") != pl.col("session_date").shift(1))
-        | (pl.col("direction") != pl.col("direction").shift(1))
-    ).fill_null(True)
-    out = df.with_columns(reset.cast(pl.Int64).cum_sum().alias("_cluster_id"))
-    out = out.with_columns(
-        pl.col("direction").cum_count().over("_cluster_id").alias("_cluster_len"),
-        pl.col("body").cum_sum().over("_cluster_id").alias("_cluster_body"),
-        pl.col("range").cum_sum().over("_cluster_id").alias("_cluster_range"),
-        pl.col("volume").cum_sum().over("_cluster_id").alias("_cluster_volume"),
-    ).with_columns(
-        pl.col("_cluster_len").clip(upper_bound=max_length).alias("consecutive_length"),
-        (pl.col("_cluster_body") / (pl.col("close").abs() + 1e-9) * 10_000).alias("cluster_body_bps"),
-        (pl.col("_cluster_range") / (pl.col("close").abs() + 1e-9) * 10_000).alias("cluster_range_bps"),
-        (pl.col("_cluster_volume") / (pl.col("volume").rolling_mean(20).clip(lower_bound=1.0) * pl.col("_cluster_len"))).alias("cluster_volume_vs_avg"),
-    )
-    for n in range(2, max_length + 1):
-        out = out.with_columns((pl.col("_cluster_len") >= n).cast(pl.Int8).alias(f"has_cluster_{n}"))
-    return out.drop(["_cluster_id", "_cluster_len", "_cluster_body", "_cluster_range", "_cluster_volume"])
+def add_candle_cluster_features(df:pl.DataFrame,max_bars:int=10)->pl.DataFrame:
+    out=df.sort("timestamp")
+    out=out.with_columns(pl.col("timestamp").dt.date().alias("_session_date"))
+    if "f_direction" not in out.columns or "f_return_1" not in out.columns:
+        from .candles import add_candle_geometry_features
+        out=add_candle_geometry_features(out)
+        out=out.with_columns(pl.col("timestamp").dt.date().alias("_session_date"))
+    eps=1e-9
+    for n in range(1,max_bars+1):
+        rolling_range=pl.col("f_range").rolling_sum(n).over("_session_date")
+        out=out.with_columns(
+            pl.col("f_return_1").rolling_sum(n).over("_session_date").alias(f"f_cluster_{n}_return"),
+            rolling_range.alias(f"f_cluster_{n}_range"),
+            pl.col("f_body").rolling_sum(n).over("_session_date").alias(f"f_cluster_{n}_body"),
+            pl.col("f_direction").rolling_sum(n).over("_session_date").alias(f"f_cluster_{n}_direction_balance"),
+            (pl.col("f_direction")==1).cast(pl.Int8).rolling_sum(n).over("_session_date").alias(f"f_cluster_{n}_up_count"),
+            (pl.col("f_direction")==-1).cast(pl.Int8).rolling_sum(n).over("_session_date").alias(f"f_cluster_{n}_down_count"),
+            pl.col("high").rolling_max(n).over("_session_date").alias(f"f_cluster_{n}_high"),
+            pl.col("low").rolling_min(n).over("_session_date").alias(f"f_cluster_{n}_low"),
+            (
+                (pl.col("close")-pl.col("close").shift(n).over("_session_date"))
+                /(rolling_range+eps)
+            ).alias(f"f_cluster_{n}_efficiency"),
+            pl.col("volume").rolling_mean(n).over("_session_date").alias(f"f_cluster_{n}_volume_mean"),
+        )
+    return out.drop("_session_date")
