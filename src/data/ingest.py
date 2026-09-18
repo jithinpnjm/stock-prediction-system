@@ -26,7 +26,7 @@ def _normalize_naive_timestamp(
     timezone: str,
 ) -> pl.DataFrame:
     dtype = df["timestamp"].dtype
-    if isinstance(dtype, pl.Datetime) and dtype.time_zone:
+    if getattr(dtype, "time_zone", None):
         return df.with_columns(
             pl.col("timestamp").dt.convert_time_zone(timezone).alias("timestamp")
         )
