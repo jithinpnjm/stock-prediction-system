@@ -1,10 +1,27 @@
 sequence_length: 48
 n_splits: 4
-epochs: 50
+epochs: 100
 batch_size: 256
 learning_rate: 0.001
-patience: 8
+patience: 15
 device: auto
 embargo_bars: 75
 min_train_rows: 500
 clip_z: 8.0
+
+# Best configs found by pipelines/07_sweep_sequence.py (15 trials each,
+# full walk-forward OOF across 3 folds). Used by pipelines/07_sequence_train.py
+# in place of the generic defaults above when present.
+tcn:
+  channels: [32, 32, 32, 32]
+  kernel_size: 5
+  dropout: 0.2914253036880643
+  learning_rate: 0.00020338064594279453
+  batch_size: 256
+transformer:
+  d_model: 64
+  n_heads: 2
+  n_layers: 2
+  dropout: 0.3528107227384992
+  learning_rate: 0.00046643169974647355
+  batch_size: 512

@@ -177,8 +177,20 @@ def run(model_family: str = "tcn"):
                 .astype(np.float32)
             )
 
+            # Use the tuned architecture/optimizer params from
+            # pipelines/07_sweep_sequence.py when present in config,
+            # falling back to the generic top-level defaults otherwise.
+            tuned = cfg.get(model_family, {})
+            batch_size = int(tuned.get("batch_size", cfg["batch_size"]))
+            learning_rate = float(tuned.get("learning_rate", cfg["learning_rate"]))
+
             if model_family == "tcn":
-                model = build_tcn(n_features)
+                model = build_tcn(
+                    n_features,
+                    channels=tuple(tuned.get("channels", (64, 64, 32))),
+                    kernel_size=int(tuned.get("kernel_size", 3)),
+                    dropout=float(tuned.get("dropout", 0.1)),
+                )
                 train_X = scaled_X.transpose(0, 2, 1)
                 result = train_sequence_classifier(
                     model,
@@ -187,14 +199,20 @@ def run(model_family: str = "tcn"):
                     train_X[val_idx],
                     batch.y[val_idx],
                     epochs=int(cfg["epochs"]),
-                    batch_size=int(cfg["batch_size"]),
-                    learning_rate=float(cfg["learning_rate"]),
+                    batch_size=batch_size,
+                    learning_rate=learning_rate,
                     patience=int(cfg["patience"]),
                     device=None if cfg.get("device", "auto") == "auto" else cfg["device"],
                 )
                 probs = sequence_predict_proba(result.model, train_X[val_idx])
             elif model_family == "transformer":
-                model = build_transformer(n_features)
+                model = build_transformer(
+                    n_features,
+                    d_model=int(tuned.get("d_model", 96)),
+                    n_heads=int(tuned.get("n_heads", 4)),
+                    n_layers=int(tuned.get("n_layers", 3)),
+                    dropout=float(tuned.get("dropout", 0.1)),
+                )
                 result = train_sequence_classifier(
                     model,
                     scaled_X[train_idx],
@@ -202,8 +220,8 @@ def run(model_family: str = "tcn"):
                     scaled_X[val_idx],
                     batch.y[val_idx],
                     epochs=int(cfg["epochs"]),
-                    batch_size=int(cfg["batch_size"]),
-                    learning_rate=float(cfg["learning_rate"]),
+                    batch_size=batch_size,
+                    learning_rate=learning_rate,
                     patience=int(cfg["patience"]),
                     device=None if cfg.get("device", "auto") == "auto" else cfg["device"],
                 )
