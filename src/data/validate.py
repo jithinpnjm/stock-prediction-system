@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, timedelta
 
 import polars as pl
 
-from src.common.contracts import MARKET_TIMEZONE
+from src.common.contracts import (
+    SESSION_CLOSE,
+    SESSION_OPEN,
+)
 from src.data.calendar import (
     get_session_spec,
+    is_trading_day,
+    load_closed_days,
     load_holidays,
     load_session_overrides,
 )
-from src.data.schemas import expected_bars, validate_schema
+from src.data.schemas import (
+    validate_schema,
+)
 
 
 @dataclass(frozen=True)
@@ -26,6 +33,7 @@ class ValidationReport:
     out_of_session: int
     invalid_minute_alignment: int
     missing_session_bars: int
+    missing_trading_sessions: int
     unexpected_sessions: tuple[date, ...]
 
     @property
@@ -40,6 +48,7 @@ class ValidationReport:
                 self.out_of_session,
                 self.invalid_minute_alignment,
                 self.missing_session_bars,
+                self.missing_trading_sessions,
                 self.unexpected_sessions,
             )
         )
@@ -52,6 +61,7 @@ def validate_1m(
     df: pl.DataFrame,
     *,
     holidays_path: str | None = None,
+    closed_days_path: str | None = None,
     session_overrides_path: str | None = None,
     require_complete_sessions: bool = True,
 ) -> ValidationReport:
@@ -59,6 +69,9 @@ def validate_1m(
 
     holidays = load_holidays(
         holidays_path
+    )
+    closed_days = load_closed_days(
+        closed_days_path
     )
     overrides = load_session_overrides(
         session_overrides_path
@@ -90,11 +103,6 @@ def validate_1m(
     invalid_minute_alignment = df.filter(
         (pl.col("timestamp").dt.second() != 0)
         | (pl.col("timestamp").dt.microsecond() != 0)
-        | (
-            pl.col("timestamp")
-            .dt.time()
-            .is_null()
-        )
     ).height
 
     non_monotonic_sessions = 0
@@ -102,6 +110,15 @@ def validate_1m(
     out_of_session = 0
     missing_session_bars = 0
     unexpected_sessions: list[date] = []
+
+    session_dates = sorted(
+        set(
+            df.get_column(
+                "session_date"
+            ).to_list()
+        )
+    )
+    present = set(session_dates)
 
     for session_df in df.partition_by(
         "session_date",
@@ -113,6 +130,10 @@ def validate_1m(
         timestamps = session_df.get_column(
             "timestamp"
         ).to_list()
+        spec = get_session_spec(
+            session,
+            overrides,
+        )
 
         if any(
             later <= earlier
@@ -132,11 +153,6 @@ def validate_1m(
             )
         )
 
-        spec = get_session_spec(
-            session,
-            overrides,
-        )
-
         out_of_session += sum(
             not (
                 spec.session_open
@@ -148,14 +164,13 @@ def validate_1m(
             for timestamp in timestamps
         )
 
-        is_override = session in overrides
-        if (
-            not is_override
-            and (
-                session.weekday() >= 5
-                or session in holidays
-            )
-        ):
+        expected_for_day = is_trading_day(
+            session,
+            holidays,
+            overrides,
+            closed_days,
+        )
+        if not expected_for_day:
             unexpected_sessions.append(
                 session
             )
@@ -169,33 +184,37 @@ def validate_1m(
                 - len(timestamps)
             )
 
+    missing_trading_sessions = 0
+    if session_dates:
+        current = session_dates[0]
+        last = session_dates[-1]
+        while current <= last:
+            if (
+                is_trading_day(
+                    current,
+                    holidays,
+                    overrides,
+                    closed_days,
+                )
+                and current not in present
+            ):
+                missing_trading_sessions += 1
+            current += timedelta(days=1)
+
     return ValidationReport(
         rows=df.height,
-        sessions=df.get_column(
-            "session_date"
-        ).n_unique(),
+        sessions=len(session_dates),
         duplicate_timestamps=duplicate_timestamps,
-        non_monotonic_sessions=(
-            non_monotonic_sessions
-        ),
-        timestamp_gap_count=(
-            timestamp_gap_count
-        ),
+        non_monotonic_sessions=non_monotonic_sessions,
+        timestamp_gap_count=timestamp_gap_count,
         invalid_geometry=invalid_geometry,
-        invalid_price_or_volume=(
-            invalid_price_or_volume
-        ),
+        invalid_price_or_volume=invalid_price_or_volume,
         out_of_session=out_of_session,
-        invalid_minute_alignment=(
-            invalid_minute_alignment
-        ),
-        missing_session_bars=(
-            missing_session_bars
-        ),
+        invalid_minute_alignment=invalid_minute_alignment,
+        missing_session_bars=missing_session_bars,
+        missing_trading_sessions=missing_trading_sessions,
         unexpected_sessions=tuple(
-            sorted(
-                set(unexpected_sessions)
-            )
+            sorted(set(unexpected_sessions))
         ),
     )
 
