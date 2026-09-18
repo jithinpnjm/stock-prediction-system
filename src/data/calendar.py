@@ -71,13 +71,20 @@ class NSECalendar:
 
     def _local_timestamp(self, df: pl.DataFrame, timestamp_col: str) -> pl.Expr:
         dtype = df[timestamp_col].dtype
-        timezone = getattr(dtype, "time_zone", None)
-        if timezone:
-            return pl.col(timestamp_col).dt.convert_time_zone(self.timezone)
-        return (
-            pl.col(timestamp_col)
-            .cast(pl.Datetime(time_zone=None), strict=False)
-            .dt.replace_time_zone(self.timezone)
+        source_timezone = getattr(dtype, "time_zone", None)
+
+        if source_timezone:
+            # Convert to market timezone first, then remove timezone metadata so
+            # Polars time-part extraction operates on the local wall clock.
+            return (
+                pl.col(timestamp_col)
+                .dt.convert_time_zone(self.timezone)
+                .dt.replace_time_zone(None)
+            )
+
+        return pl.col(timestamp_col).cast(
+            pl.Datetime(time_zone=None),
+            strict=False,
         )
 
     def _session_minutes(self, df: pl.DataFrame, timestamp_col: str) -> pl.Expr:
