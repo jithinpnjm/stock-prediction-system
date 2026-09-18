@@ -1,0 +1,16 @@
+source:
+  symbol: "NSE:NIFTYBANK-INDEX"
+  timezone: "Asia/Kolkata"
+  timestamp_semantics: "bar_start"
+  resolution: "1"
+  expected_1m_bars_per_session: 375
+  session_open: "09:15"
+  session_close: "15:30"
+  raw_glob: "data/raw/fyers/*.parquet"
+
+ingestion:
+  allow_legacy_files:
+    - "data/raw/1m_data.parquet"
+    - "data/banknifty_spot_1m.csv"
+  bronze_path: "data/bronze/1m_canonical.parquet"
+  holidays_path: "configs/data/nse_holidays.csv"

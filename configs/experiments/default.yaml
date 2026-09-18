@@ -1,0 +1,5 @@
+experiment_name: "BankNifty_Research"
+seed: 42
+feature_version: "features-v1"
+label_version: "triple-barrier-v1"
+dataset_version: "dataset-v1"
