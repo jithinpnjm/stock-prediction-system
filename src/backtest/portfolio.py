@@ -1,34 +1,56 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(frozen=True)
 class Trade:
-    entry_time: str
+    entry_time: object
+    exit_time: object
+    direction: int
+    quantity: float
     entry_price: float
-    direction: int  # 1 for long, -1 for short
-    size: float
-    exit_time: str = None
-    exit_price: float = None
-    pnl: float = 0.0
+    exit_price: float
+    pnl: float
+    exit_reason: str
+    signal_time: object
 
 
 class Portfolio:
-    def __init__(self, initial_capital: float = 100000.0):
-        self.initial_capital = initial_capital
-        self.cash = initial_capital
-        self.position = 0  # +1 (Long), -1 (Short), 0 (Flat)
-        self.position_size = 0.0
-        self.entry_price = 0.0
-        self.entry_time = None
-        self.trade_history: list[Trade] = []
+    def __init__(self, initial_capital: float = 100_000.0):
+        self.initial_capital=initial_capital
+        self.cash=initial_capital
+        self.position=0
+        self.quantity=0.0
+        self.entry_price=0.0
+        self.entry_time=None
+        self.signal_time=None
+        self.trade_history:list[Trade]=[]
 
-    def update_portfolio(self, current_price: float) -> float:
-        """Returns the mark-to-market value of the portfolio."""
+    @property
+    def equity(self)->float:
+        return self.cash
+
+    def open(self,time,signal_time,price,direction,quantity):
+        if self.position != 0:
+            raise RuntimeError("portfolio already has a position")
+        self.position=direction
+        self.quantity=quantity
+        self.entry_price=price
+        self.entry_time=time
+        self.signal_time=signal_time
+
+    def close(self,time,price,reason):
         if self.position == 0:
-            return self.cash
-
-        # Calculate unrealized PnL
-        unrealized_pnl = (
-            (current_price - self.entry_price) * self.position * self.position_size
+            return None
+        pnl=(price-self.entry_price)*self.position*self.quantity
+        self.cash+=pnl
+        trade=Trade(
+            entry_time=self.entry_time,exit_time=time,direction=self.position,
+            quantity=self.quantity,entry_price=self.entry_price,exit_price=price,
+            pnl=pnl,exit_reason=reason,signal_time=self.signal_time
         )
-        return self.cash + unrealized_pnl
+        self.trade_history.append(trade)
+        self.position=0; self.quantity=0.0; self.entry_price=0.0
+        self.entry_time=None; self.signal_time=None
+        return trade
