@@ -8,15 +8,16 @@ from src.labels.triple_barrier import apply_triple_barrier_labels
 
 
 def run():
-    cfg=yaml.safe_load(Path("configs/labels/triple_barrier.yaml").read_text())
-    features=pl.read_parquet("data/silver/5m_features.parquet")
-    source=pl.read_parquet("data/bronze/validated_1m.parquet")
-    features=features.filter(
-        (pl.col("timestamp").dt.hour()*60+pl.col("timestamp").dt.minute()>=9*60+30)
-        & (pl.col("timestamp").dt.hour()*60+pl.col("timestamp").dt.minute()<=15*60)
-    )
-    labeled=apply_triple_barrier_labels(
-        features,source,
+    cfg = yaml.safe_load(Path("configs/labels/triple_barrier.yaml").read_text())
+    features = pl.read_parquet("data/silver/5m_features.parquet")
+    source = pl.read_parquet("data/bronze/validated_1m.parquet")
+    minute_of_day = pl.col("timestamp").dt.hour().cast(pl.Int32) * 60 + pl.col(
+        "timestamp"
+    ).dt.minute().cast(pl.Int32)
+    features = features.filter((minute_of_day >= 9 * 60 + 30) & (minute_of_day <= 15 * 60))
+    labeled = apply_triple_barrier_labels(
+        features,
+        source,
         target_pts=float(cfg["target_points"]),
         stop_pts=float(cfg["stop_points"]),
         max_horizon_minutes=int(cfg["max_horizon_minutes"]),
@@ -26,5 +27,5 @@ def run():
     print(f"labeled dataset: {labeled.shape}")
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     run()

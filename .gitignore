@@ -13,6 +13,7 @@ __pycache__/
 !.env.example
 secrets/*
 !secrets/fyers_auth.example.json
+/fyers_auth.py
 *.pem
 *.key
 *credentials*

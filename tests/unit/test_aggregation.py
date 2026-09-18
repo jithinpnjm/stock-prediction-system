@@ -5,11 +5,15 @@ import polars as pl
 
 from src.common.contracts import MARKET_TIMEZONE
 from src.data.aggregate import aggregate_1m_to_5m
+from src.data.calendar import NSECalendar
 
 
 def test_5m_candle_uses_close_timestamp():
     tz = ZoneInfo(MARKET_TIMEZONE)
-    start = datetime(2026, 1, 5, 9, 15, tzinfo=tz)
+    # Canonical 1m "timestamp" values are already availability timestamps
+    # (source_timestamp + 1 minute), so the earliest valid value in-session
+    # is 09:16, not the raw session-open source timestamp of 09:15.
+    start = datetime(2026, 1, 5, 9, 16, tzinfo=tz)
     ts = [start + timedelta(minutes=i) for i in range(10)]
     df = pl.DataFrame(
         {
@@ -22,7 +26,7 @@ def test_5m_candle_uses_close_timestamp():
             "volume": [1.0] * 10,
         }
     )
-    out = aggregate_1m_to_5m(df, drop_incomplete=True)
+    out = aggregate_1m_to_5m(df, calendar=NSECalendar(), drop_incomplete=True)
     assert out.height == 2
     assert out["timestamp"][0] == datetime(2026, 1, 5, 9, 20, tzinfo=tz)
     assert out["timestamp"][1] == datetime(2026, 1, 5, 9, 25, tzinfo=tz)
