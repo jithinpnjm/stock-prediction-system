@@ -54,8 +54,12 @@ def validate_1m(
     holidays = load_holidays(holidays_path)
 
     duplicate_timestamps = int(
-        df.height - df.select(pl.col("timestamp").n_unique()).item()
+        df.height
+        - df.select(
+            pl.col("timestamp").n_unique()
+        ).item()
     )
+
     invalid_geometry = df.filter(
         (pl.col("low") > pl.col("high"))
         | (pl.col("open") < pl.col("low"))
@@ -63,6 +67,7 @@ def validate_1m(
         | (pl.col("open") > pl.col("high"))
         | (pl.col("close") > pl.col("high"))
     ).height
+
     invalid_price_or_volume = df.filter(
         (pl.col("open") < 0)
         | (pl.col("high") < 0)
@@ -70,12 +75,14 @@ def validate_1m(
         | (pl.col("close") < 0)
         | (pl.col("volume") < 0)
     ).height
+
     out_of_session = df.filter(
         ~(
             (pl.col("timestamp").dt.time() >= SESSION_OPEN)
             & (pl.col("timestamp").dt.time() < SESSION_CLOSE)
         )
     ).height
+
     invalid_minute_alignment = df.filter(
         (pl.col("timestamp").dt.second() != 0)
         | (pl.col("timestamp").dt.microsecond() != 0)
@@ -87,22 +94,48 @@ def validate_1m(
     unexpected_sessions: list[date] = []
     expected = expected_bars("1m")
 
-    for session_df in df.partition_by("session_date", as_dict=False):
-        session = session_df.get_column("session_date")[0]
-        ts = session_df.sort("timestamp").get_column("timestamp").to_list()
-        if any(b <= a for a, b in zip(ts, ts[1:])):
+    for session_df in df.partition_by(
+        "session_date", as_dict=False
+    ):
+        session = session_df.get_column(
+            "session_date"
+        )[0]
+        timestamps = session_df.get_column(
+            "timestamp"
+        ).to_list()
+
+        if any(
+            later <= earlier
+            for earlier, later in zip(
+                timestamps,
+                timestamps[1:],
+            )
+        ):
             non_monotonic_sessions += 1
+
         timestamp_gap_count += sum(
-            (b - a).total_seconds() != 60 for a, b in zip(ts, ts[1:])
+            (later - earlier).total_seconds() != 60
+            for earlier, later in zip(
+                timestamps,
+                timestamps[1:],
+            )
         )
+
         if session.weekday() >= 5 or session in holidays:
             unexpected_sessions.append(session)
-        elif require_complete_sessions and len(ts) != expected:
-            missing_session_bars += abs(expected - len(ts))
+        elif (
+            require_complete_sessions
+            and len(timestamps) != expected
+        ):
+            missing_session_bars += abs(
+                expected - len(timestamps)
+            )
 
     return ValidationReport(
         rows=df.height,
-        sessions=df.get_column("session_date").n_unique(),
+        sessions=df.get_column(
+            "session_date"
+        ).n_unique(),
         duplicate_timestamps=duplicate_timestamps,
         non_monotonic_sessions=non_monotonic_sessions,
         timestamp_gap_count=timestamp_gap_count,
@@ -111,12 +144,19 @@ def validate_1m(
         out_of_session=out_of_session,
         invalid_minute_alignment=invalid_minute_alignment,
         missing_session_bars=missing_session_bars,
-        unexpected_sessions=tuple(sorted(set(unexpected_sessions))),
+        unexpected_sessions=tuple(
+            sorted(set(unexpected_sessions))
+        ),
     )
 
 
-def assert_valid_1m(df: pl.DataFrame, **kwargs) -> ValidationReport:
+def assert_valid_1m(
+    df: pl.DataFrame,
+    **kwargs,
+) -> ValidationReport:
     report = validate_1m(df, **kwargs)
     if not report.ok:
-        raise ValueError(f"1m validation failed: {report}")
+        raise ValueError(
+            f"1m validation failed: {report}"
+        )
     return report

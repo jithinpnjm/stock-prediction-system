@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import os
-from pathlib import Path
 
 import polars as pl
 
@@ -13,17 +11,37 @@ from src.common.config import load_yaml
 
 
 def run() -> None:
-    cfg = load_yaml(os.getenv("BACKTEST_CONFIG", "configs/backtest/default.yaml"))
-    prices = pl.read_parquet("data/silver/5m_canonical.parquet")
-    predictions = pl.read_parquet("data/ml/oof_predictions.parquet")
-    merged = predictions.join(prices, on="timestamp", how="inner").sort("timestamp")
+    cfg = load_yaml(
+        os.getenv(
+            "BACKTEST_CONFIG",
+            "configs/backtest/default.yaml",
+        )
+    )
+
+    prices = pl.read_parquet(
+        "data/silver/5m_canonical.parquet"
+    )
+    predictions = pl.read_parquet(
+        "data/ml/calibrated_oof_predictions.parquet"
+    )
+
+    merged = (
+        predictions
+        .join(prices, on="timestamp", how="inner")
+        .sort("timestamp")
+    )
+
+    if merged.is_empty():
+        raise RuntimeError(
+            "No timestamp overlap between predictions and prices"
+        )
+
     decisions = build_trade_decisions(
         merged,
         min_confidence=float(cfg["min_confidence"]),
         min_edge=float(cfg["min_edge"]),
-        target_points=200.0,
-        stop_points=70.0,
     )
+
     backtester = EventDrivenBacktester(
         decisions,
         initial_capital=float(cfg["initial_capital"]),
@@ -32,36 +50,62 @@ def run() -> None:
         latency_bars=int(cfg["latency_bars"]),
         execution_price_column=cfg["execution_price"],
         costs=ExecutionCosts(
-            spread_points=float(cfg["spread_points"]),
-            slippage_points=float(cfg["slippage_points"]),
-            commission_per_order=float(cfg["commission_per_order"]),
-            transaction_cost_bps=float(cfg["transaction_cost_bps"]),
+            spread_points=float(
+                cfg["spread_points"]
+            ),
+            slippage_points=float(
+                cfg["slippage_points"]
+            ),
+            commission_per_order=float(
+                cfg["commission_per_order"]
+            ),
+            transaction_cost_bps=float(
+                cfg["transaction_cost_bps"]
+            ),
+        ),
+        allow_overnight=bool(
+            cfg.get("allow_overnight", False)
         ),
     )
+
     equity, trades = backtester.run()
+
     os.makedirs("data/backtest", exist_ok=True)
-    equity.write_parquet("data/backtest/equity_curve.parquet", compression="zstd")
+    equity.write_parquet(
+        "data/backtest/equity_curve.parquet",
+        compression="zstd",
+    )
+
     pl.DataFrame(
         [
             {
-                "entry_time": t.entry_time,
-                "exit_time": t.exit_time,
-                "entry_price": t.entry_price,
-                "exit_price": t.exit_price,
-                "direction": t.direction,
-                "units": t.units,
-                "gross_pnl": t.gross_pnl,
-                "commissions": t.commissions,
-                "pnl": t.pnl,
+                "entry_time": trade.entry_time,
+                "exit_time": trade.exit_time,
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price,
+                "direction": trade.direction,
+                "units": trade.units,
+                "gross_pnl": trade.gross_pnl,
+                "commissions": trade.commissions,
+                "transaction_costs": trade.transaction_costs,
+                "pnl": trade.pnl,
+                "exit_reason": trade.exit_reason,
             }
-            for t in trades
+            for trade in trades
         ]
-    ).write_parquet("data/backtest/trades.parquet", compression="zstd")
+    ).write_parquet(
+        "data/backtest/trades.parquet",
+        compression="zstd",
+    )
+
     decisions.write_parquet(
         "data/backtest/predictions_with_prices.parquet",
         compression="zstd",
     )
-    print(f"Backtest produced {len(trades)} trades")
+
+    print(
+        f"Backtest produced {len(trades)} trades"
+    )
 
 
 if __name__ == "__main__":
