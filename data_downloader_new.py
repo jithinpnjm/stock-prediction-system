@@ -6,7 +6,7 @@ Prefer `python scripts/download_banknifty.py` for new workflows.
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
 
 from src.data.downloader import FyersBankNiftyDownloader
 
