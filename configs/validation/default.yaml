@@ -1,0 +1,3 @@
+n_splits: 5
+embargo_bars: 75
+min_train_rows: 500

@@ -1,0 +1,90 @@
+stages:
+  ingest:
+    cmd: python pipelines/01_ingest.py
+    deps:
+      - pipelines/01_ingest.py
+      - src/data/ingest.py
+      - src/data/schemas.py
+    params:
+      - data.raw_source
+      - data.bronze
+    outs:
+      - data/bronze/validated_1m.parquet
+  validate:
+    cmd: python pipelines/02_validate.py
+    deps:
+      - data/bronze/validated_1m.parquet
+      - configs/data/nse_holidays.yaml
+      - pipelines/02_validate.py
+      - src/data/validate.py
+    outs:
+      - data/bronze/validation_report.json
+  aggregate:
+    cmd: python pipelines/03_aggregate_5m.py
+    deps:
+      - data/bronze/validated_1m.parquet
+      - configs/data/nse_holidays.yaml
+      - pipelines/03_aggregate_5m.py
+      - src/data/aggregate.py
+    outs:
+      - data/silver/5m_canonical.parquet
+  features:
+    cmd: python pipelines/04_features.py
+    deps:
+      - data/silver/5m_canonical.parquet
+      - configs/features/default.yaml
+      - pipelines/04_features.py
+    outs:
+      - data/silver/5m_features.parquet
+  labels:
+    cmd: python pipelines/05_labels.py
+    deps:
+      - data/silver/5m_features.parquet
+      - data/bronze/validated_1m.parquet
+      - configs/labels/triple_barrier.yaml
+      - pipelines/05_labels.py
+    outs:
+      - data/gold/dataset_v1.parquet
+  dataset:
+    cmd: python pipelines/06_build_dataset.py
+    deps:
+      - data/gold/dataset_v1.parquet
+      - pipelines/06_build_dataset.py
+    outs:
+      - data/ml/training_dataset.parquet
+      - data/ml/feature_schema.json
+  train:
+    cmd: python pipelines/07_train.py
+    deps:
+      - data/ml/training_dataset.parquet
+      - configs/models/lightgbm.yaml
+      - configs/validation/default.yaml
+      - pipelines/07_train.py
+    outs:
+      - data/predictions/lgbm_oof.parquet
+  validate_model:
+    cmd: python pipelines/08_validate.py
+    deps:
+      - data/predictions/lgbm_oof.parquet
+      - pipelines/08_validate.py
+    outs:
+      - reports/validation_report.json
+  backtest:
+    cmd: python pipelines/09_backtest.py
+    deps:
+      - data/predictions/lgbm_oof.parquet
+      - data/bronze/validated_1m.parquet
+      - configs/backtest/default.yaml
+      - pipelines/09_backtest.py
+    outs:
+      - data/backtest/equity_curve.parquet
+      - data/backtest/trades.parquet
+  report:
+    cmd: python pipelines/10_report.py
+    deps:
+      - reports/validation_report.json
+      - data/backtest/equity_curve.parquet
+      - data/backtest/trades.parquet
+      - pipelines/10_report.py
+    outs:
+      - reports/research_report.json
