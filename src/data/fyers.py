@@ -19,12 +19,14 @@ class FyersConfig:
     max_attempts: int = 5
     retry_base_seconds: int = 5
     inter_chunk_sleep: float = 1.5
-    min_complete_candles: int = 350
+    min_complete_candles: int = 375
 
 
 def load_credentials(path: str | Path | None = None) -> dict[str, str]:
     """Load local Fyers credentials without ever requiring them in Git."""
-    payload_path = Path(path or os.getenv("FYERS_AUTH_FILE", "secrets/fyers_auth.json"))
+    payload_path = Path(
+        path or os.getenv("FYERS_AUTH_FILE", "secrets/fyers_auth.json")
+    )
     if payload_path.exists():
         payload = json.loads(payload_path.read_text())
         return {
@@ -71,7 +73,8 @@ def _response_frame(response: dict) -> pl.DataFrame:
             }
         )
     raw = pd.DataFrame(
-        candles, columns=["epoch", "open", "high", "low", "close", "volume"]
+        candles,
+        columns=["epoch", "open", "high", "low", "close", "volume"],
     )
     raw["timestamp"] = (
         pd.to_datetime(raw["epoch"], unit="s", utc=True)
@@ -91,6 +94,9 @@ def fetch_window(
     config: FyersConfig | None = None,
 ) -> pl.DataFrame:
     cfg = config or FyersConfig()
+    if cfg.chunk_days < 1:
+        raise ValueError("chunk_days must be >= 1")
+
     all_frames: list[pl.DataFrame] = []
     cursor = start
     while cursor <= end:
@@ -110,7 +116,8 @@ def fetch_window(
                 if not isinstance(response, dict):
                     raise RuntimeError(f"invalid Fyers response: {response!r}")
                 code = response.get("code")
-                if code == -429 or "limit" in str(response.get("message", "")).lower():
+                message = str(response.get("message", ""))
+                if code == -429 or "limit" in message.lower():
                     time.sleep(cfg.retry_base_seconds * (2**attempt))
                     continue
                 if response.get("s") == "ok":

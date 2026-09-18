@@ -3,39 +3,57 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
-from src.backtest.engine import EventDrivenBacktester
-from src.backtest.execution import ExecutionCosts
+from src.backtest.engine import BacktestConfig, EventDrivenBacktester
+from src.backtest.execution import ExecutionConfig
 
 
-def test_backtest_respects_latency_and_closes_position():
+def test_backtest_respects_signal_to_next_1m_source_execution():
     tz = ZoneInfo("Asia/Kolkata")
-    start = datetime(2026, 1, 5, 9, 15, tzinfo=tz)
-    ts = [start + timedelta(minutes=5 * i) for i in range(4)]
-    df = pl.DataFrame(
+    signal_time = datetime(2026, 1, 5, 9, 30, tzinfo=tz)
+    availability = [
+        signal_time + timedelta(minutes=1),
+        signal_time + timedelta(minutes=2),
+    ]
+    source = [
+        signal_time,
+        signal_time + timedelta(minutes=1),
+    ]
+    bars = pl.DataFrame(
         {
-            "timestamp": ts,
-            "open": [100, 101, 103, 104],
-            "high": [101, 102, 104, 105],
-            "low": [99, 100, 102, 103],
-            "close": [100, 101, 103, 104],
-            "signal": [1, 0, 0, 0],
+            "timestamp": availability,
+            "source_timestamp": source,
+            "open": [100.0, 101.0],
+            "high": [101.0, 102.0],
+            "low": [99.0, 100.0],
+            "close": [101.0, 102.0],
         }
     )
-    bt = EventDrivenBacktester(
-        df,
-        initial_capital=1000,
-        units=1,
-        point_value=1,
-        latency_bars=1,
-        execution_price_column="open",
-        costs=ExecutionCosts(
-            spread_points=0,
-            slippage_points=0,
-            commission_per_order=0,
-            transaction_cost_bps=0,
+    signals = pl.DataFrame(
+        {
+            "timestamp": [signal_time],
+            "signal": [1],
+        }
+    )
+    config = BacktestConfig(
+        initial_capital=1000.0,
+        target_points=1.0,
+        stop_points=70.0,
+        entry_start="09:30",
+        entry_end="15:00",
+        flatten_time="15:30",
+        execution=ExecutionConfig(
+            slippage_points=0.0,
+            commission_per_order=0.0,
+            quantity=1.0,
+            latency_bars=1,
         ),
     )
-    equity, trades = bt.run()
+
+    equity, trades = EventDrivenBacktester(config).run(signals, bars)
+
     assert len(trades) == 1
-    assert trades[0].entry_time == ts[1]
-    assert equity["equity"][-1] == 1003
+    assert trades[0].entry_time == source[1]
+    assert trades[0].signal_time == signal_time
+    assert trades[0].exit_time == availability[1]
+    assert trades[0].exit_reason == "target"
+    assert equity["equity"][-1] == 1001.0

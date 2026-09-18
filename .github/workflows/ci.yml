@@ -3,7 +3,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main, proper-research-foundation]
+    branches: [main, proper-research-foundation, cleanup-and-continuity]
 
 jobs:
   test:
@@ -17,8 +17,8 @@ jobs:
       - name: Install
         run: python -m pip install -e ".[dev]"
       - name: Lint (advisory)
-        run: ruff check src pipelines tests || true
+        run: ruff check src pipelines tests scripts data_downloader_new.py || true
       - name: Compile
-        run: python -m compileall src pipelines tests
+        run: python -m compileall data_downloader_new.py scripts src pipelines tests
       - name: Test
         run: pytest

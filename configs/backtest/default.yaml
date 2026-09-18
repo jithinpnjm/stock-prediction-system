@@ -9,4 +9,4 @@ commission_per_order: 20
 quantity: 15
 latency_bars: 1
 min_probability: 0.55
-min_edge: 0.10
+min_directional_edge: 0.10
