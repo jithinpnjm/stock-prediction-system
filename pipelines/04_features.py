@@ -15,6 +15,7 @@ from src.features.microstructure import add_1m_inside_5m_features
 from src.features.multitimeframe import add_multi_timeframe_features
 from src.features.opening_candles import add_opening_candle_features
 from src.features.opening_range import add_opening_range_features
+from src.features.options_context import add_options_context_features
 from src.features.session_context import add_session_context_features
 from src.features.support_resistance import add_support_resistance_features
 from src.features.swings import add_swing_features
@@ -45,6 +46,7 @@ def run():
     df = add_1m_inside_5m_features(source, df)
     df = add_event_sampling_features(df, float(cfg["cusum_threshold_multiple"]))
     df = add_compression_zone_features(df)
+    df = add_options_context_features(df)
 
     if bool(cfg.get("enable_vwap", False)):
         from src.features.session_vwap import add_session_vwap
