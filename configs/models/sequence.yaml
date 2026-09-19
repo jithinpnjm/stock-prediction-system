@@ -8,6 +8,9 @@ device: auto
 embargo_bars: 75
 min_train_rows: 500
 clip_z: 8.0
+pretrain_epochs: 40
+pretrain_learning_rate: 0.001
+pretrain_patience: 8
 
 # Best configs found by pipelines/07_sweep_sequence.py (15 trials each,
 # full walk-forward OOF across 3 folds). Used by pipelines/07_sequence_train.py
