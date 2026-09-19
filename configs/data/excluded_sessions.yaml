@@ -22,5 +22,7 @@ excluded_dates:
     reason: "vendor feed gap: 371 of 375 expected 1m bars present (4-minute dropout)"
   - date: "2023-11-08"
     reason: "otherwise-complete day, but its 09:15 candle is corrupt (open/close inconsistent with high/low, single-tick vendor error); dropping just that row leaves 374 of 375 bars, which also fails the completeness gate, so the whole day is excluded"
+  - date: "2026-09-18"
+    reason: "vendor feed capture stopped mid-afternoon: only 319 of 375 expected 1m bars present. Was still 'today' (in-progress, correctly excluded) during the 2026-09-18 session; now a permanently incomplete historical day."
 
 excluded_timestamps: []
