@@ -106,6 +106,19 @@ SEQUENCE_FEATURE_COLUMNS = [
     "f_1m_path_high_rejection",
     "f_1m_path_low_rebound",
     "f_1m_up_ratio",
+    "f_c1_range_atr",
+    "f_c1_body_ratio",
+    "f_c1_upper_wick_ratio",
+    "f_c1_lower_wick_ratio",
+    "f_c1_direction",
+    "f_c2_range_atr",
+    "f_c2_body_ratio",
+    "f_c2_upper_wick_ratio",
+    "f_c2_lower_wick_ratio",
+    "f_c2_direction",
+    "f_opening_gap_atr",
+    "f_c1_c2_aligned",
+    "f_c1c2_combined_range_atr",
 ]
 
 
