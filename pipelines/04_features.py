@@ -13,6 +13,7 @@ from src.features.historical_intraday import add_historical_intraday_context
 from src.features.market_structure import add_market_structure_features
 from src.features.microstructure import add_1m_inside_5m_features
 from src.features.multitimeframe import add_multi_timeframe_features
+from src.features.opening_candles import add_opening_candle_features
 from src.features.opening_range import add_opening_range_features
 from src.features.session_context import add_session_context_features
 from src.features.support_resistance import add_support_resistance_features
@@ -40,6 +41,7 @@ def run():
     df = add_support_resistance_features(df, int(cfg["support_resistance_lookback"]))
     df = add_market_structure_features(df)
     df = add_opening_range_features(df, tuple(cfg["opening_range_windows"]))
+    df = add_opening_candle_features(df)
     df = add_1m_inside_5m_features(source, df)
     df = add_event_sampling_features(df, float(cfg["cusum_threshold_multiple"]))
     df = add_compression_zone_features(df)
