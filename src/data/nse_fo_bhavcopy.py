@@ -16,9 +16,18 @@ from datetime import date
 import polars as pl
 import requests
 
-_ARCHIVE_URL = (
+_LEGACY_URL = (
     "https://nsearchives.nseindia.com/content/historical/DERIVATIVES/"
     "{year}/{mon}/fo{day:02d}{mon}{year}bhav.csv.zip"
+)
+# NSE migrated the F&O bhavcopy to this "UDiFF" format/naming around
+# 2024-07-08; the legacy URL above 404s for every date from that point
+# on (confirmed: the legacy backfill silently stopped at 2024-07-05 with
+# 544 consecutive 404s, not real missing days). Different column names,
+# same underlying data -- normalized to the legacy schema below so
+# parse_banknifty_daily doesn't need to know which era it's reading.
+_UDIFF_URL = (
+    "https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{ymd}_F_0000.csv.zip"
 )
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
@@ -29,28 +38,63 @@ class FetchResult:
     raw: pl.DataFrame | None  # None means no data for this date (holiday etc.)
 
 
-def _bhavcopy_url(d: date) -> str:
+_UDIFF_INSTRUMENT_MAP = {"IDF": "FUTIDX", "IDO": "OPTIDX", "STF": "FUTSTK", "STO": "OPTSTK"}
+_UDIFF_RENAME = {
+    "TckrSymb": "SYMBOL",
+    "FinInstrmTp": "INSTRUMENT",
+    "StrkPric": "STRIKE_PR",
+    "OptnTp": "OPTION_TYP",
+    "ClsPric": "CLOSE",
+    "OpnIntrst": "OPEN_INT",
+    "ChngInOpnIntrst": "CHG_IN_OI",
+    "TtlTradgVol": "CONTRACTS",
+}
+
+
+def _normalize_udiff(raw: pl.DataFrame) -> pl.DataFrame:
+    out = raw.rename(_UDIFF_RENAME)
+    out = out.with_columns(
+        pl.col("INSTRUMENT").replace(_UDIFF_INSTRUMENT_MAP),
+        pl.col("XpryDt")
+        .str.strptime(pl.Date, "%Y-%m-%d")
+        .dt.strftime("%d-%b-%Y")
+        .alias("EXPIRY_DT"),
+    )
+    return out
+
+
+def _legacy_url(d: date) -> str:
     mon = d.strftime("%b").upper()
-    return _ARCHIVE_URL.format(year=d.year, mon=mon, day=d.day)
+    return _LEGACY_URL.format(year=d.year, mon=mon, day=d.day)
+
+
+def _udiff_url(d: date) -> str:
+    return _UDIFF_URL.format(ymd=d.strftime("%Y%m%d"))
+
+
+def _get_zip_csv(url: str, timeout: int) -> pl.DataFrame | None:
+    resp = requests.get(url, headers=_HEADERS, timeout=timeout)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        name = zf.namelist()[0]
+        return pl.read_csv(
+            zf.read(name), infer_schema_length=None, schema_overrides={"STRIKE_PR": pl.Float64}
+        )
 
 
 def fetch_bhavcopy(d: date, *, timeout: int = 20, max_attempts: int = 4) -> FetchResult:
-    url = _bhavcopy_url(d)
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
         try:
-            resp = requests.get(url, headers=_HEADERS, timeout=timeout)
-            if resp.status_code == 404:
-                return FetchResult(d, None)
-            resp.raise_for_status()
-            with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-                name = zf.namelist()[0]
-                raw = pl.read_csv(
-                    zf.read(name),
-                    infer_schema_length=None,
-                    schema_overrides={"STRIKE_PR": pl.Float64},
-                )
-            return FetchResult(d, raw)
+            raw = _get_zip_csv(_legacy_url(d), timeout)
+            if raw is not None:
+                return FetchResult(d, raw)
+            raw = _get_zip_csv(_udiff_url(d), timeout)
+            if raw is not None:
+                return FetchResult(d, _normalize_udiff(raw))
+            return FetchResult(d, None)
         except Exception as exc:  # noqa: BLE001 -- retry on any transient failure
             last_exc = exc
             time.sleep(2 * (attempt + 1))
