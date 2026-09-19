@@ -7,6 +7,7 @@ import yaml
 
 from src.features.candles import add_candle_geometry_features
 from src.features.clusters import add_candle_cluster_features
+from src.features.compression_zone import add_compression_zone_features
 from src.features.event_sampling import add_event_sampling_features
 from src.features.historical_intraday import add_historical_intraday_context
 from src.features.market_structure import add_market_structure_features
@@ -41,6 +42,7 @@ def run():
     df = add_opening_range_features(df, tuple(cfg["opening_range_windows"]))
     df = add_1m_inside_5m_features(source, df)
     df = add_event_sampling_features(df, float(cfg["cusum_threshold_multiple"]))
+    df = add_compression_zone_features(df)
 
     if bool(cfg.get("enable_vwap", False)):
         from src.features.session_vwap import add_session_vwap
